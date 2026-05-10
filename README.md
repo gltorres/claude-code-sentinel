@@ -26,3 +26,11 @@ Early development. Not yet installable.
 ## License
 
 TBD
+
+## Local development install
+
+```
+/plugin marketplace add ./claude-code-sentinel
+/plugin install sentinel@claude-code-sentinel
+/reload-plugins
+```
