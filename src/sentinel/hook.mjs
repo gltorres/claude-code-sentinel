@@ -10,6 +10,7 @@ import { matchPath } from './paths.mjs'
 import { evaluateBash } from './bash-policy.mjs'
 import { evaluateRegistry } from './registry-policy.mjs'
 import { resolveCachePath, loadCache, flushCache } from './registry-cache.mjs'
+import { scrubResponse } from './scrubber-policy.mjs'
 
 const EVENT_NAMES = ['PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd']
 const MIN_NODE = '20.10.0'
@@ -363,9 +364,32 @@ await (async () => {
       }
       break
     }
-    case 'PostToolUse':
-      emit(envelope('PostToolUse', { additionalContext: '' }))
-      break
+    case 'PostToolUse': {
+      try {
+        if (config?.scrubber?.enabled === false) {
+          process.stdout.write(JSON.stringify(envelope('PostToolUse', { additionalContext: '' })) + '\n')
+          process.exit(0)
+        }
+        const text = String(event.tool_response ?? '')
+        const result = scrubResponse({ text, config })
+        for (const { family, count } of result.redactions) {
+          try {
+            writeAuditLine(
+              config,
+              'PostToolUse',
+              { ...event, scrub_family: family, scrub_count: count },
+              { event: 'scrub', decision: 'allow', rule: 'scrubber.' + family, matched: null },
+            )
+          } catch {}
+        }
+        process.stdout.write(JSON.stringify(envelope('PostToolUse', { additionalContext: result.redacted })) + '\n')
+        process.exit(0)
+      } catch {
+        // Fail-open: scrubber crash must never block the tool turn
+        process.stdout.write(JSON.stringify(envelope('PostToolUse', { additionalContext: '' })) + '\n')
+        process.exit(0)
+      }
+    }
     case 'SessionStart':
       emit(envelope('SessionStart', { additionalContext: '' }))
       break

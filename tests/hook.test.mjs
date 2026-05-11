@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve, join } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
@@ -383,5 +383,161 @@ test('PreToolUse Bash heredoc produces ask decision', () => {
     assert.equal(rec.decision, 'ask')
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// ─── PostToolUse scrubber integration tests (Sprint 06, Spec 5) ────────────────
+
+// Test S1: Bash response containing an Anthropic API key is redacted.
+// Asserts: stdout envelope contains <REDACTED:anthropic>, audit JSONL has one
+//          event:'scrub' line with rule:'scrubber.anthropic', and the raw secret
+//          never appears in any audit line.
+test('PostToolUse Bash response with Anthropic API key is scrubbed', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-scrub-'))
+  try {
+    const fakeKey = 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+    const input = JSON.stringify({
+      session_id: 'scrub-test-s1',
+      cwd: '/tmp/project',
+      tool_name: 'Bash',
+      tool_response: `Command output: ${fakeKey}`,
+    })
+    const r = runHookEnv(['PostToolUse'], input, { CLAUDE_PLUGIN_DATA: dataDir })
+    assert.equal(r.status, 0, `hook exited ${r.status}; stderr: ${r.stderr}`)
+
+    // Envelope: stdout must parse as valid JSON with the correct event name
+    const out = JSON.parse(r.stdout.trim())
+    assert.equal(out.hookSpecificOutput.hookEventName, 'PostToolUse')
+
+    // The redacted text must contain the family tag, not the raw secret
+    const ctx = out.hookSpecificOutput.additionalContext
+    assert.ok(
+      ctx.includes('<REDACTED:anthropic>'),
+      `additionalContext must contain <REDACTED:anthropic>, got: ${ctx}`,
+    )
+    assert.ok(
+      !ctx.includes('sk-ant-'),
+      `additionalContext must NOT contain the raw secret, got: ${ctx}`,
+    )
+
+    // Audit JSONL: exactly one scrub line for the anthropic family
+    const auditPath = join(dataDir, 'audit.jsonl')
+    const lines = readFileSync(auditPath, 'utf8').trim().split('\n').filter(Boolean)
+    const scrubLines = lines.map(l => JSON.parse(l)).filter(rec => rec.event === 'scrub')
+    assert.equal(scrubLines.length, 1, `expected 1 scrub audit line, got ${scrubLines.length}`)
+    const scrubRec = scrubLines[0]
+    assert.equal(scrubRec.rule, 'scrubber.anthropic')
+    assert.equal(scrubRec.decision, 'allow')
+    assert.equal(scrubRec.hook, 'PostToolUse')
+    assert.equal(scrubRec.input_summary.family, 'anthropic')
+    assert.ok(scrubRec.input_summary.count >= 1, 'count must be >= 1')
+
+    // Safety: the raw secret must never appear in any audit line
+    const rawAudit = readFileSync(auditPath, 'utf8')
+    assert.ok(
+      !rawAudit.includes('sk-ant-'),
+      'audit JSONL must not contain the raw secret text',
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// Test S2: Read response with no secret passes through verbatim with zero scrub audit lines.
+// Asserts: stdout envelope contains the original text verbatim in additionalContext,
+//          no audit lines carry event:'scrub'.
+test('PostToolUse Read response with no secret passes through verbatim', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-scrub-'))
+  try {
+    const cleanText = 'the build passed in 4.2 seconds with 47 tests'
+    const input = JSON.stringify({
+      session_id: 'scrub-test-s2',
+      cwd: '/tmp/project',
+      tool_name: 'Read',
+      tool_response: cleanText,
+    })
+    const r = runHookEnv(['PostToolUse'], input, { CLAUDE_PLUGIN_DATA: dataDir })
+    assert.equal(r.status, 0, `hook exited ${r.status}; stderr: ${r.stderr}`)
+
+    const out = JSON.parse(r.stdout.trim())
+    assert.equal(out.hookSpecificOutput.hookEventName, 'PostToolUse')
+    assert.equal(
+      out.hookSpecificOutput.additionalContext,
+      cleanText,
+      'additionalContext must equal the original clean text verbatim',
+    )
+
+    // Audit JSONL: zero scrub lines (the file may not exist or may have zero lines)
+    const auditPath = join(dataDir, 'audit.jsonl')
+    let scrubLineCount = 0
+    try {
+      const lines = readFileSync(auditPath, 'utf8').trim().split('\n').filter(Boolean)
+      scrubLineCount = lines.map(l => JSON.parse(l)).filter(rec => rec.event === 'scrub').length
+    } catch {
+      scrubLineCount = 0 // file does not exist — no audit lines written at all
+    }
+    assert.equal(scrubLineCount, 0, `expected 0 scrub audit lines, got ${scrubLineCount}`)
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// Test S3: scrubber.enabled = false via project config overlay produces empty
+//          additionalContext and zero audit lines.
+// This test writes a project-level sentinel.json into a temp cwd that disables the scrubber,
+// then passes that cwd in the event so loadConfig picks it up.
+test('PostToolUse scrubber disabled via config produces empty additionalContext', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-scrub-'))
+  const projectDir = mkdtempSync(join(tmpdir(), 'sentinel-proj-'))
+  try {
+    // Write a project-level sentinel.json that disables the scrubber
+    const claudeDir = join(projectDir, '.claude')
+    mkdirSync(claudeDir, { recursive: true })
+    writeFileSync(
+      join(claudeDir, 'sentinel.json'),
+      JSON.stringify({ scrubber: { enabled: false } }),
+    )
+
+    // Build a PostToolUse event with a secret in tool_response but pointing at the
+    // project dir so loadConfig sees scrubber.enabled = false
+    const fakeKey = 'sk-ant-api03-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
+    const input = JSON.stringify({
+      session_id: 'scrub-test-s3',
+      cwd: projectDir,
+      tool_name: 'Bash',
+      tool_response: `output: ${fakeKey}`,
+    })
+    const r = runHookEnv(['PostToolUse'], input, { CLAUDE_PLUGIN_DATA: dataDir })
+    assert.equal(r.status, 0, `hook exited ${r.status}; stderr: ${r.stderr}`)
+
+    const out = JSON.parse(r.stdout.trim())
+    assert.equal(out.hookSpecificOutput.hookEventName, 'PostToolUse')
+    assert.equal(
+      out.hookSpecificOutput.additionalContext,
+      '',
+      'additionalContext must be empty when scrubber is disabled',
+    )
+
+    // Audit JSONL: zero scrub lines
+    const auditPath = join(dataDir, 'audit.jsonl')
+    let scrubLineCount = 0
+    try {
+      const lines = readFileSync(auditPath, 'utf8').trim().split('\n').filter(Boolean)
+      scrubLineCount = lines.map(l => JSON.parse(l)).filter(rec => rec.event === 'scrub').length
+    } catch {
+      scrubLineCount = 0
+    }
+    assert.equal(scrubLineCount, 0, `expected 0 scrub audit lines when scrubber is disabled, got ${scrubLineCount}`)
+
+    // Safety: even though scrubbing was disabled, the raw secret must not appear in audit
+    let rawAudit = ''
+    try { rawAudit = readFileSync(auditPath, 'utf8') } catch {}
+    assert.ok(
+      !rawAudit.includes('sk-ant-'),
+      'audit JSONL must not contain raw secret text even in the disabled path',
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+    rmSync(projectDir, { recursive: true, force: true })
   }
 })
