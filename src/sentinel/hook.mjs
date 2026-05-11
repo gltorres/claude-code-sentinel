@@ -38,7 +38,7 @@ function emit(obj, decisionCtx = {}) {
 
 // --self-test branch: load fixtures, run matchPath in-process, report timing
 if (process.argv.includes('--self-test')) {
-  const fixturesDir = new URL('../../../tests/fixtures/paths', import.meta.url).pathname
+  const fixturesDir = new URL('../../tests/fixtures/paths', import.meta.url).pathname
   const files = readdirSync(fixturesDir).filter(f => f.endsWith('.json'))
   const selfTestConfig = loadConfig()
   let failures = 0

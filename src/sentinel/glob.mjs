@@ -93,9 +93,12 @@ export function compileGlob(pattern) {
   } else if (pattern.startsWith('/')) {
     // Absolute pattern — anchor directly to start
     full = '^' + src + '$'
-  } else {
-    // Relative pattern without '**/' — allow it to appear after any leading path
+  } else if (pattern.includes('/')) {
+    // Relative pattern with embedded separator (e.g. src/index.mjs) — allow leading path
     full = '^(.*/)?' + src + '$'
+  } else {
+    // Single-segment pattern (e.g. *.md) — must NOT cross a path separator
+    full = '^' + src + '$'
   }
 
   return new RegExp(full)
