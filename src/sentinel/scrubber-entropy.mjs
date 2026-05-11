@@ -1,22 +1,17 @@
-// Scrubber entropy — Sprint 06.
-// Shannon entropy scanner for the output scrubber.
-// Finds contiguous non-whitespace runs of length >= 24 in post-family text
-// and replaces those with entropy > 4.5 bits with <REDACTED:high_entropy>.
-// Skips runs that are already a <REDACTED:[a-z_]+> tag.
-//
-// Exported:
-//   shannonEntropy(str) → number   (bits; 0 for empty string)
-//   scrubEntropy(text)  → { text: string, count: number }
+// Scrubber entropy — Sprint scrubber rebuild.
+// Detects high-entropy opaque tokens that survived family/context passes.
+// Tokeniser is the base64url alphabet so paths (which contain `/`, `.`,
+// punctuation) cannot accidentally form one long run.
 
-// Regex that identifies an already-redacted tag so the entropy scanner
-// does not re-scan tokens that the family scanner already replaced.
 const REDACTED_TAG_RE = /^<REDACTED:[a-z_]+>$/
 
-// Regex that matches contiguous non-whitespace runs of at least 24 chars.
-const RUN_RE = /\S{24,}/g
+function buildCandidateRe(minLength) {
+  return new RegExp(`[A-Za-z0-9_-]{${minLength},}`, 'g')
+}
 
-// Compute Shannon entropy: -Σ p_i log2(p_i) over the character-frequency
-// distribution of str.  Returns 0 for an empty string.
+// Subresource Integrity prefix: skip when run is preceded by `sha256-` etc.
+const SRI_PREFIX_RE = /sha(?:256|384|512)-$/
+
 export function shannonEntropy(str) {
   if (str.length === 0) return 0
   const freq = new Map()
@@ -30,18 +25,32 @@ export function shannonEntropy(str) {
   return h
 }
 
-// Scan text for high-entropy non-whitespace runs and replace them.
-// Returns { text: <scrubbed string>, count: <number of replacements> }.
-export function scrubEntropy(text) {
-  let count = 0
-  const scrubbed = text.replace(RUN_RE, (run) => {
-    // Skip runs that are already a redaction tag (e.g. <REDACTED:anthropic>).
+function countLinesUpTo(text, offset) {
+  let n = 0
+  for (let i = 0; i < offset; i++) if (text.charCodeAt(i) === 10) n++
+  return n
+}
+
+export function scrubEntropy(text, opts = {}) {
+  const threshold = opts.threshold ?? 4.0
+  const minLength = opts.minLength ?? 32
+  const re = buildCandidateRe(minLength)
+  const instances = []
+  const t = String(text ?? '')
+  const scrubbed = t.replace(re, (run, offset) => {
     if (REDACTED_TAG_RE.test(run)) return run
-    if (shannonEntropy(run) > 4.5) {
-      count++
+    // SRI exemption: run is immediately preceded by `sha\d+-`.
+    const preceding = t.slice(Math.max(0, offset - 10), offset)
+    if (SRI_PREFIX_RE.test(preceding)) return run
+    if (shannonEntropy(run) > threshold) {
+      instances.push({
+        prefix: run.slice(0, 4),
+        length: run.length,
+        line: countLinesUpTo(t, offset) + 1,
+      })
       return '<REDACTED:high_entropy>'
     }
     return run
   })
-  return { text: scrubbed, count }
+  return { text: scrubbed, count: instances.length, instances }
 }

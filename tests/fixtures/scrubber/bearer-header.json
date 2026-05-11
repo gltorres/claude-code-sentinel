@@ -1,0 +1,8 @@
+{
+  "event": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_response": "GET /v1/foo HTTP/1.1\nAuthorization: Bearer abcd1234efgh5678ijkl"
+  },
+  "expect": { "decision": "allow", "rule": "scrubber.bearer_header", "matched": null }
+}

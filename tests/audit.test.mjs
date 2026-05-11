@@ -35,12 +35,16 @@ function makeTempConfig(tmpDir) {
   return { audit: { path: join(tmpDir, 'audit.jsonl'), maxSizeMb: 10 } }
 }
 
+// Synthetic decisionCtx used by tests that exercise writer mechanics rather
+// than policy — must include a rule so it is not suppressed as a no-op warn.
+const SYN = { event: 'warn', decision: 'allow', rule: 'test.synthetic', matched: null }
+
 // (a) A single writeAuditLine call produces one JSON-parseable line with all
 // twelve PRD §10 fields in the documented order.
 test('writeAuditLine produces one parseable line with all twelve fields in order', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'sentinel-audit-'))
   const config = makeTempConfig(tmp)
-  writeAuditLine(config, 'PreToolUse', { tool_name: 'Read', tool_input: { file_path: '/foo.txt' } })
+  writeAuditLine(config, 'PreToolUse', { tool_name: 'Read', tool_input: { file_path: '/foo.txt' } }, SYN)
   const raw = readFileSync(join(tmp, 'audit.jsonl'), 'utf8').trim()
   const lines = raw.split('\n').filter(Boolean)
   assert.equal(lines.length, 1)
@@ -52,7 +56,7 @@ test('writeAuditLine produces one parseable line with all twelve fields in order
 test('id matches ULID alphabet and length', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'sentinel-audit-'))
   const config = makeTempConfig(tmp)
-  writeAuditLine(config, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: 'ls' } })
+  writeAuditLine(config, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: 'ls' } }, SYN)
   const raw = readFileSync(join(tmp, 'audit.jsonl'), 'utf8').trim()
   const parsed = JSON.parse(raw.split('\n')[0])
   assert.match(parsed.id, ULID_RE)
@@ -62,7 +66,7 @@ test('id matches ULID alphabet and length', () => {
 test('event and decision values are within their allowed sets', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'sentinel-audit-'))
   const config = makeTempConfig(tmp)
-  writeAuditLine(config, 'SessionStart', {})
+  writeAuditLine(config, 'SessionStart', {}, SYN)
   const raw = readFileSync(join(tmp, 'audit.jsonl'), 'utf8').trim()
   const parsed = JSON.parse(raw.split('\n')[0])
   assert.ok(VALID_EVENTS.has(parsed.event), `event '${parsed.event}' not in allowed set`)
@@ -76,7 +80,7 @@ test('secret-bash fixture input_summary excludes verbatim secret', () => {
   const config = makeTempConfig(tmp)
   const fixturePath = resolve(__dirname, 'fixtures', 'secret-bash.json')
   const eventJson = JSON.parse(readFileSync(fixturePath, 'utf8'))
-  writeAuditLine(config, 'PreToolUse', eventJson)
+  writeAuditLine(config, 'PreToolUse', eventJson, SYN)
   const raw = readFileSync(join(tmp, 'audit.jsonl'), 'utf8').trim()
   const parsed = JSON.parse(raw.split('\n')[0])
   const summary = JSON.stringify(parsed.input_summary)
@@ -94,13 +98,13 @@ test('exceeding maxSizeMb causes rotation to audit.jsonl.1', () => {
   // Write a seed file that is already over the tiny cap
   const config = { audit: { path: auditPath, maxSizeMb: 0.0001 } }
   // First write to create and pre-fill the file above the cap
-  writeAuditLine(config, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: 'echo seed' } })
+  writeAuditLine(config, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: 'echo seed' } }, SYN)
   // Manually inflate the file past the cap (0.0001 MB = ~102 bytes)
   const padding = 'x'.repeat(200)
   writeFileSync(auditPath, readFileSync(auditPath, 'utf8') + padding)
   const inflatedSize = statSync(auditPath).size
   // Second write should trigger rotation
-  writeAuditLine(config, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: 'echo trigger' } })
+  writeAuditLine(config, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: 'echo trigger' } }, SYN)
   assert.ok(existsSync(auditPath + '.1'), 'audit.jsonl.1 should exist after rotation')
   const freshSize = statSync(auditPath).size
   assert.ok(freshSize < inflatedSize, `active audit.jsonl should be small after rotation, got ${freshSize} bytes`)
@@ -113,14 +117,14 @@ test('second rotation overwrites audit.jsonl.1 without creating .2', () => {
   const config = { audit: { path: auditPath, maxSizeMb: 0.0001 } }
 
   // First rotation cycle
-  writeAuditLine(config, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: 'echo a' } })
+  writeAuditLine(config, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: 'echo a' } }, SYN)
   writeFileSync(auditPath, readFileSync(auditPath, 'utf8') + 'x'.repeat(200))
-  writeAuditLine(config, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: 'echo b' } })
+  writeAuditLine(config, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: 'echo b' } }, SYN)
   // audit.jsonl.1 now exists from first rotation
 
   // Inflate the newly created audit.jsonl for second rotation
   writeFileSync(auditPath, readFileSync(auditPath, 'utf8') + 'x'.repeat(200))
-  writeAuditLine(config, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: 'echo c' } })
+  writeAuditLine(config, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: 'echo c' } }, SYN)
 
   assert.ok(existsSync(auditPath + '.1'), 'audit.jsonl.1 should still exist after second rotation')
   assert.ok(!existsSync(auditPath + '.2'), 'audit.jsonl.2 must NOT exist — single-level rotation only')
@@ -156,18 +160,45 @@ test('summariseInput returns notebook path for NotebookEdit tool', () => {
   assert.deepEqual(summary, { path: '/project/analysis.ipynb' })
 })
 
-// (i) Calling writeAuditLine without a decision argument keeps the Sprint 02
-// defaults: event:'warn' and decision:'allow'.
-test('writeAuditLine without decision arg keeps warn/allow defaults', () => {
+// (i) Calling writeAuditLine without a decision argument is now suppressed
+// as a no-op warn (Phase 1 noise cut). Verify nothing is written.
+test('writeAuditLine without decision arg is suppressed (no-op warn)', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'sentinel-audit-'))
   const config = makeTempConfig(tmp)
   writeAuditLine(config, 'PreToolUse', { tool_name: 'Read', tool_input: { file_path: '/ok.txt' } })
-  const raw = readFileSync(join(tmp, 'audit.jsonl'), 'utf8').trim()
-  const parsed = JSON.parse(raw.split('\n')[0])
-  assert.equal(parsed.event, 'warn')
-  assert.equal(parsed.decision, 'allow')
-  assert.equal(parsed.rule, null)
-  assert.equal(parsed.matched, null)
+  const auditPath = join(tmp, 'audit.jsonl')
+  assert.equal(existsSync(auditPath), false, 'no-op warn must not create the audit file')
+})
+
+// (i.b) Phase 1: explicit no-op warn shape (warn + null rule + null matched)
+// is also suppressed regardless of how it arrives.
+test('writeAuditLine: explicit no-op warn (no rule, no matched) is suppressed', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'sentinel-audit-noop-'))
+  const config = makeTempConfig(tmp)
+  writeAuditLine(
+    config,
+    'PreToolUse',
+    { tool_name: 'Read' },
+    { event: 'warn', decision: 'allow', rule: null, matched: null },
+  )
+  const auditPath = join(tmp, 'audit.jsonl')
+  assert.equal(existsSync(auditPath), false, 'no audit file should have been created')
+})
+
+// (i.c) A warn line that carries a rule is still recorded (forensic value).
+test('writeAuditLine: warn with a rule is still recorded', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'sentinel-warn-rule-'))
+  const config = makeTempConfig(tmp)
+  writeAuditLine(
+    config,
+    'PreToolUse',
+    { tool_name: 'Bash' },
+    { event: 'warn', decision: 'allow', rule: 'registry.unavailable', matched: null },
+  )
+  const lines = readFileSync(join(tmp, 'audit.jsonl'), 'utf8').trim().split('\n')
+  assert.equal(lines.length, 1)
+  const rec = JSON.parse(lines[0])
+  assert.equal(rec.rule, 'registry.unavailable')
 })
 
 // (j) For a Bash deny decision, input_summary.matched_segment is populated from
@@ -224,7 +255,7 @@ test('tailAuditEntries returns a single entry from a one-line file', () => {
     config,
     'PreToolUse',
     { tool_name: 'Bash', tool_input: { command: 'echo hello' } },
-    { event: 'warn', decision: 'allow', rule: null, matched: null },
+    { event: 'warn', decision: 'allow', rule: 'test.synthetic', matched: null },
   )
   const results = tailAuditEntries({ config, n: 5, paths: [auditPath] })
   assert.equal(results.length, 1)
@@ -260,7 +291,7 @@ test('tailAuditEntries spans primary and rotated file to reach n results', () =>
     config,
     'PreToolUse',
     { tool_name: 'Read', tool_input: { file_path: '/foo.txt' } },
-    { event: 'warn', decision: 'allow', rule: null, matched: null },
+    { event: 'warn', decision: 'allow', rule: 'test.synthetic', matched: null },
   )
 
   // Request 3 entries: should come from both files (1 from primary, 2 from rotated)

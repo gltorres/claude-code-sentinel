@@ -1,0 +1,8 @@
+{
+  "event": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_response": "OPENAI_API_KEY=sk-proj-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "expect": { "decision": "allow", "rule": "scrubber.openai", "matched": null }
+}

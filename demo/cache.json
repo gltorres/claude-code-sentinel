@@ -1,1 +1,1 @@
-{"pypi:huggingface-cli-utils":{"ts":1778515779423,"decision":"ask","rule":"registry.too_new","reason":"Package huggingface-cli-utils is only 3 days old (< 14)"}}
+{"pypi:huggingface-cli-utils":{"ts":1778534296600,"decision":"ask","rule":"registry.too_new","reason":"Package huggingface-cli-utils is only 3 days old (< 14)"}}

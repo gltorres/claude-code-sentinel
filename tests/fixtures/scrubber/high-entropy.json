@@ -2,7 +2,7 @@
   "event": {
     "hook_event_name": "PostToolUse",
     "tool_name": "Bash",
-    "tool_response": "SECRET=xK9mZ3qR7vL2nP8wT5yB4cF6jH0dA1sE+Q/uIoWgXeYaNbVhMlDr"
+    "tool_response": "build artifact xK9mZ3qR7vL2nP8wT5yB4cF6jH0dA1sExQXuIoWgXeYaNbVhMlDr done"
   },
   "expect": { "decision": "allow", "rule": "scrubber.high_entropy", "matched": null }
 }

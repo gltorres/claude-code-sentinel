@@ -1,0 +1,8 @@
+{
+  "event": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_response": "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKZEXAMPLE\n-----END RSA PRIVATE KEY-----"
+  },
+  "expect": { "decision": "allow", "rule": "scrubber.pem_private_key", "matched": null }
+}

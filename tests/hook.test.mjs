@@ -85,12 +85,15 @@ test('invalid JSON on stdin is fail-open', () => {
   assert.equal(out.hookSpecificOutput.permissionDecision, 'allow')
 })
 
-test('PreToolUse writes one audit line to CLAUDE_PLUGIN_DATA', () => {
+test('PreToolUse writes one audit line to CLAUDE_PLUGIN_DATA (deny path)', () => {
+  // Phase 1: silent-allow Bash no longer writes a no-op warn line. Use a
+  // command that triggers bash-policy deny so a forensic line is written.
   const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-audit-'))
   const input = JSON.stringify({
     session_id: 'sess-1',
+    cwd: '/tmp/project',
     tool_name: 'Bash',
-    tool_input: { command: 'ls' },
+    tool_input: { command: 'cat .env' },
   })
   const r = runHookEnv(['PreToolUse'], input, { CLAUDE_PLUGIN_DATA: dataDir })
   assert.equal(r.status, 0)
@@ -103,8 +106,9 @@ test('audit line has all twelve PRD schema fields and a valid ULID id', () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-audit-'))
   const input = JSON.stringify({
     session_id: 'sess-2',
+    cwd: '/tmp/project',
     tool_name: 'Bash',
-    tool_input: { command: 'echo hello' },
+    tool_input: { command: 'cat .env' },
   })
   const r = runHookEnv(['PreToolUse'], input, { CLAUDE_PLUGIN_DATA: dataDir })
   assert.equal(r.status, 0)
@@ -445,16 +449,17 @@ test('PostToolUse Bash response with Anthropic API key is scrubbed', () => {
     const out = JSON.parse(r.stdout.trim())
     assert.equal(out.hookSpecificOutput.hookEventName, 'PostToolUse')
 
-    // The redacted text must contain the family tag, not the raw secret
+    // additionalContext is now a short banner (Phase 5), not a full body echo.
     const ctx = out.hookSpecificOutput.additionalContext
     assert.ok(
-      ctx.includes('<REDACTED:anthropic>'),
-      `additionalContext must contain <REDACTED:anthropic>, got: ${ctx}`,
+      ctx.includes('anthropic'),
+      `additionalContext banner must name the anthropic family, got: ${ctx}`,
     )
     assert.ok(
       !ctx.includes('sk-ant-'),
       `additionalContext must NOT contain the raw secret, got: ${ctx}`,
     )
+    assert.ok(ctx.length < 200, `banner must be short, got ${ctx.length} bytes`)
 
     // Audit JSONL: exactly one scrub line for the anthropic family
     const auditPath = join(dataDir, 'audit.jsonl')
@@ -499,8 +504,8 @@ test('PostToolUse Read response with no secret passes through verbatim', () => {
     assert.equal(out.hookSpecificOutput.hookEventName, 'PostToolUse')
     assert.equal(
       out.hookSpecificOutput.additionalContext,
-      cleanText,
-      'additionalContext must equal the original clean text verbatim',
+      '',
+      'additionalContext must be empty when no secrets are detected (augment-only contract)',
     )
 
     // Audit JSONL: zero scrub lines (the file may not exist or may have zero lines)
@@ -932,8 +937,8 @@ test('PostToolUse coerces object tool_response to scrub-able JSON (not "[object 
       `raw secret must be redacted from scrubbed output, got: ${ctx}`,
     )
     assert.ok(
-      ctx.includes('<REDACTED:anthropic>'),
-      `scrubber must redact the embedded sk-ant- token, got: ${ctx}`,
+      ctx.includes('anthropic'),
+      `scrubber banner must name the anthropic family, got: ${ctx}`,
     )
   } finally {
     rmSync(dataDir, { recursive: true, force: true })

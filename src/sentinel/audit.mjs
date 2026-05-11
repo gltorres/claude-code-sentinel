@@ -65,10 +65,13 @@ export function resolveAuditPath(config) {
 // Each branch returns the minimum data needed to reconstruct what happened.
 export function summariseInput(hookEvent, tool, eventJson, decisionCtx = {}) {
   if (hookEvent === 'PostToolUse' && eventJson.scrub_family != null) {
-    // PostToolUse scrub events: log what family was redacted and how many times
+    // PostToolUse scrub events: log family + per-instance forensics.
     return {
       family: eventJson.scrub_family ?? null,
       count: eventJson.scrub_count ?? 0,
+      prefix: eventJson.scrub_prefix ?? null,
+      length: eventJson.scrub_length ?? null,
+      line: eventJson.scrub_line ?? null,
     }
   }
   if (tool === 'Read' || tool === 'Edit' || tool === 'Grep' || tool === 'Glob') {
@@ -105,6 +108,15 @@ export function writeAuditLine(
   decision = { event: 'warn', decision: 'allow', rule: null, matched: null },
 ) {
   try {
+    // A `warn` with no rule and no matched value is the default no-op shape
+    // used by sites that wrap unconditional allow emits (node preflight,
+    // path-allow, scaffold no-op, SessionStart, silent bash allow). These
+    // add no forensic value — drop them rather than pollute the log.
+    const isNoOpWarn =
+      (decision.event ?? 'warn') === 'warn' &&
+      decision.rule == null &&
+      decision.matched == null
+    if (isNoOpWarn) return
     const path = resolveAuditPath(config)
     persistAuditPointer(path)
     const maxSizeMb = config?.audit?.maxSizeMb ?? 10

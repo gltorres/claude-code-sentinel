@@ -25,7 +25,9 @@ test('disabled — scrubber.enabled:false returns empty redacted and zero redact
 })
 
 test('composition — anthropic key AND high-entropy run produces two redaction entries', () => {
-  const input = `key=${ANT_KEY} token=${HIGH_ENT}`
+  // Use a leading non-keyword identifier so the entropy run reaches the
+  // entropy detector instead of being caught by the assignment context detector.
+  const input = `key=${ANT_KEY} value ${HIGH_ENT}`
   const r = scrubResponse({ text: input, config: CFG_ON })
 
   // Anthropic family must have fired.
@@ -93,6 +95,54 @@ test('extraPatterns object — {name,pattern} tagged as <REDACTED:corp>', () => 
   const corpEntry = r.redactions.find(e => e.family === 'corp')
   assert.ok(corpEntry, 'corp redaction entry must be present in redactions')
   assert.equal(corpEntry.count, 1)
+})
+
+test('pipeline: family runs before context; context does not double-tag family hits', () => {
+  const result = scrubResponse({
+    text: 'OPENAI_KEY=sk-proj-' + 'A'.repeat(40),
+    config: { scrubber: { enabled: true, extraPatterns: [] } },
+  })
+  const families = result.redactions.map(r => r.family)
+  assert.ok(families.includes('openai'))
+  assert.ok(!families.includes('assignment'), 'context must skip already-redacted family hits')
+})
+
+test('pipeline: context catches what family misses (DB_PASSWORD=hunter2)', () => {
+  const result = scrubResponse({
+    text: 'DB_PASSWORD=hunter2',
+    config: { scrubber: { enabled: true, extraPatterns: [] } },
+  })
+  assert.ok(result.redactions.some(r => r.family === 'assignment'))
+  assert.ok(!result.redacted.includes('hunter2'))
+})
+
+test('banner: empty when no redactions', () => {
+  const r = scrubResponse({
+    text: 'hello world',
+    config: { scrubber: { enabled: true, extraPatterns: [] } },
+  })
+  assert.equal(r.banner, '')
+})
+
+test('banner: short fixed format with family + count, < 200 bytes', () => {
+  const r = scrubResponse({
+    text: 'sk-ant-api03-' + 'X'.repeat(86) + ' DB_PASSWORD=hunter2',
+    config: { scrubber: { enabled: true, extraPatterns: [] } },
+  })
+  assert.match(r.banner, /^Sentinel: scrubbed \d+ secret\(s\) — /)
+  assert.ok(r.banner.length < 200, `banner too long: ${r.banner.length}`)
+})
+
+test('redaction instances: prefix is first 4 chars, length matches, line=1', () => {
+  const tok = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'
+  const r = scrubResponse({
+    text: tok,
+    config: { scrubber: { enabled: true, extraPatterns: [] } },
+  })
+  const ghp = r.redactions.find(x => x.family === 'github_pat')
+  assert.equal(ghp.instances[0].prefix, 'ghp_')
+  assert.equal(ghp.instances[0].length, tok.length)
+  assert.equal(ghp.instances[0].line, 1)
 })
 
 test('error swallowed — bad extraPatterns regex still returns valid shape with original text', () => {

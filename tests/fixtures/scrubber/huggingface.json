@@ -1,0 +1,8 @@
+{
+  "event": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_response": "HF_TOKEN=hf_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "expect": { "decision": "allow", "rule": "scrubber.huggingface", "matched": null }
+}

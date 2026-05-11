@@ -1,0 +1,8 @@
+{
+  "event": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_response": "GOOGLE_API_KEY=AIzaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "expect": { "decision": "allow", "rule": "scrubber.google_api", "matched": null }
+}

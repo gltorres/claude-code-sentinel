@@ -1,0 +1,8 @@
+{
+  "event": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_response": { "stdout": "sk-ant-api03-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", "stderr": "", "interrupted": false }
+  },
+  "expect": { "decision": "allow", "rule": "scrubber.anthropic", "matched": null }
+}

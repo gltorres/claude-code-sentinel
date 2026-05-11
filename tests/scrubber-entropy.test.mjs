@@ -64,13 +64,64 @@ test('scrubEntropy: prose is preserved; only the high-entropy run is redacted', 
   assert.equal(count, 1)
 })
 
-// ── scrubEntropy: run shorter than 24 chars is never inspected ────────────────
+// ── scrubEntropy: run shorter than minLength is never inspected ──────────────
 
 test('scrubEntropy: run of exactly 23 chars is never inspected regardless of entropy', () => {
-  // Construct a 23-char string with high character diversity
   const run23 = 'Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh'  // 24 chars — trim one
   const run22 = run23.slice(0, 23)
   const { text, count } = scrubEntropy(run22)
   assert.equal(text, run22)
   assert.equal(count, 0)
+})
+
+// ── scrubEntropy: new contract (Phase 4) ──────────────────────────────────────
+
+test('scrubEntropy: 31-char run is NEVER inspected (under default minLength 32)', () => {
+  const tok = 'A3bC9dEfGhIjKlMnOpQrStUvWxYz012'  // 31 chars
+  const { text, count } = scrubEntropy(tok)
+  assert.equal(text, tok)
+  assert.equal(count, 0)
+})
+
+test('scrubEntropy: long file path is NOT redacted (excluded by alphabet)', () => {
+  const p = '/Users/foo/workspace/apps/claude-code-sentinel/src/sentinel/hook.mjs'
+  const { text, count } = scrubEntropy(p)
+  assert.equal(text, p)
+  assert.equal(count, 0)
+})
+
+test('scrubEntropy: SHA-1 (40 hex) NOT redacted at default threshold 4.0', () => {
+  const sha = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4'
+  const { text, count } = scrubEntropy(sha)
+  assert.equal(count, 0)
+  assert.equal(text, sha)
+})
+
+test('scrubEntropy: SRI integrity hash skipped via exemption', () => {
+  const input = '"integrity":"sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"'
+  const { count } = scrubEntropy(input)
+  assert.equal(count, 0)
+})
+
+test('scrubEntropy: custom threshold lowers sensitivity', () => {
+  const tok = 'a'.repeat(16) + 'b'.repeat(16) // 32 chars, low entropy ~1
+  const { count: c1 } = scrubEntropy(tok, { threshold: 4.0 })
+  const { count: c2 } = scrubEntropy(tok, { threshold: 0.5 })
+  assert.equal(c1, 0)
+  assert.equal(c2, 1)
+})
+
+test('scrubEntropy: custom minLength lets shorter runs fire', () => {
+  const tok = 'A3bC9dEfGhIj0123' // 16 chars
+  const { count } = scrubEntropy(tok, { minLength: 16, threshold: 3.0 })
+  assert.equal(count, 1)
+})
+
+test('scrubEntropy: instances carry prefix/length/line metadata', () => {
+  const tok = 'A3bC9dEfGhIjKlMnOpQrStUvWxYz0123'
+  const { instances } = scrubEntropy(tok)
+  assert.equal(instances.length, 1)
+  assert.equal(instances[0].prefix, 'A3bC')
+  assert.equal(instances[0].length, 32)
+  assert.equal(instances[0].line, 1)
 })

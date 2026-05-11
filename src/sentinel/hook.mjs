@@ -11,6 +11,7 @@ import { evaluateBash } from './bash-policy.mjs'
 import { evaluateRegistry } from './registry-policy.mjs'
 import { resolveCachePath, loadCache, flushCache } from './registry-cache.mjs'
 import { scrubResponse } from './scrubber-policy.mjs'
+import { extractScrubInput } from './scrubber-extract.mjs'
 import { summariseAuditWindow, composeBanner } from './session.mjs'
 
 const EVENT_NAMES = ['PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd']
@@ -227,18 +228,37 @@ if (process.argv.includes('--self-test')) {
             now: fixture.now ?? Date.now(),
           })
         } else if (bucket === 'scrubber') {
-          const text = String(fixtureEvent.tool_response ?? '')
+          const rawResp = fixtureEvent.tool_response
           const fixtureConfig = fixture.config ?? selfTestConfig
-          const result = scrubResponse({ text, config: fixtureConfig })
-          // Map scrubResponse result to the shape the comparator expects.
-          // rule: first family that fired (prefixed), or null if none.
-          // decision: always 'allow' (PostToolUse is additive-only).
-          // matched: always null (the matched value is the secret — never log it).
-          const firstFamily = result.redactions.length > 0 ? result.redactions[0].family : null
-          actual = {
-            decision: result.decision,
-            rule: firstFamily != null ? 'scrubber.' + firstFamily : null,
-            matched: result.matched,
+          // Phase 1: structured tool_response shapes are routed through
+          // extractScrubInput first; string-shaped fixtures pass through
+          // unchanged. Skip-path matches yield a no-op allow record.
+          if (typeof rawResp === 'object' && rawResp !== null) {
+            const { text, skip } = extractScrubInput(
+              fixtureEvent.tool_name ?? '',
+              rawResp,
+              fixtureConfig?.scrubber?.skipPaths,
+            )
+            if (skip) {
+              actual = { decision: 'allow', rule: null, matched: null }
+            } else {
+              const result = scrubResponse({ text, config: fixtureConfig })
+              const firstFamily = result.redactions.length > 0 ? result.redactions[0].family : null
+              actual = {
+                decision: result.decision,
+                rule: firstFamily != null ? 'scrubber.' + firstFamily : null,
+                matched: result.matched,
+              }
+            }
+          } else {
+            const text = String(rawResp ?? '')
+            const result = scrubResponse({ text, config: fixtureConfig })
+            const firstFamily = result.redactions.length > 0 ? result.redactions[0].family : null
+            actual = {
+              decision: result.decision,
+              rule: firstFamily != null ? 'scrubber.' + firstFamily : null,
+              matched: result.matched,
+            }
           }
         } else if (bucket === 'session') {
           // Materialise fixture.audit_lines into a temp audit.jsonl file.
@@ -449,30 +469,38 @@ await (async () => {
           process.stdout.write(JSON.stringify(envelope('PostToolUse', { additionalContext: '' })) + '\n')
           process.exit(0)
         }
-        const rawResponse = event.tool_response
-        let text
-        if (rawResponse == null) {
-          text = ''
-        } else if (typeof rawResponse === 'string') {
-          text = rawResponse
-        } else {
-          // Bash/Read responses arrive as structured objects ({stdout, stderr, ...}; {file:{content,...}}).
-          // JSON.stringify exposes every textual field to the scrubber's family/entropy detectors
-          // without losing data. Fail-open to '' if stringification throws (circular ref, etc.).
-          try { text = JSON.stringify(rawResponse) } catch { text = '' }
+        const skipPaths = config?.scrubber?.skipPaths
+        const { text, skip } = extractScrubInput(event.tool_name ?? '', event.tool_response, skipPaths)
+        if (skip || text === '') {
+          process.stdout.write(JSON.stringify(envelope('PostToolUse', { additionalContext: '' })) + '\n')
+          process.exit(0)
         }
         const result = scrubResponse({ text, config })
-        for (const { family, count } of result.redactions) {
-          try {
-            writeAuditLine(
-              config,
-              'PostToolUse',
-              { ...event, scrub_family: family, scrub_count: count },
-              { event: 'scrub', decision: 'allow', rule: 'scrubber.' + family, matched: null },
-            )
-          } catch {}
+        for (const r of result.redactions) {
+          const instances = r.instances ?? [{ prefix: null, length: null, line: null }]
+          for (const inst of instances) {
+            try {
+              writeAuditLine(
+                config,
+                'PostToolUse',
+                {
+                  ...event,
+                  scrub_family: r.family,
+                  scrub_count: r.count,
+                  scrub_prefix: inst.prefix,
+                  scrub_length: inst.length,
+                  scrub_line: inst.line,
+                },
+                { event: 'scrub', decision: 'allow', rule: 'scrubber.' + r.family, matched: null },
+              )
+            } catch {}
+          }
         }
-        process.stdout.write(JSON.stringify(envelope('PostToolUse', { additionalContext: result.redacted })) + '\n')
+        // Augment-only contract: emit the short banner when secrets fired,
+        // empty otherwise. The full redacted body would only duplicate the
+        // tool result the model already received.
+        const additionalContext = result.redactions.length > 0 ? result.banner : ''
+        process.stdout.write(JSON.stringify(envelope('PostToolUse', { additionalContext })) + '\n')
         process.exit(0)
       } catch {
         // Fail-open: scrubber crash must never block the tool turn

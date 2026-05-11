@@ -309,3 +309,106 @@ describe('extraPatterns: {name, pattern} shape', () => {
     assert.equal(redactions.length, 0)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Phase 2: new families and OpenAI fix
+// ---------------------------------------------------------------------------
+describe('phase 2: new family rules', () => {
+  it('openai: catches sk-proj- modern project keys', () => {
+    const t = 'OPENAI_API_KEY=sk-proj-' + alnum(40)
+    const { text } = scrubFamilies(t, [])
+    assert.ok(text.includes('<REDACTED:openai>'))
+    assert.ok(!text.includes('sk-proj-AAAA'))
+  })
+
+  it('openai: catches sk-svcacct- service account keys', () => {
+    const t = 'sk-svcacct-' + alnum(40)
+    const { text } = scrubFamilies(t, [])
+    assert.ok(text.includes('<REDACTED:openai>'))
+  })
+
+  it('openai: catches sk-admin- admin keys', () => {
+    const t = 'sk-admin-' + alnum(40)
+    const { text } = scrubFamilies(t, [])
+    assert.ok(text.includes('<REDACTED:openai>'))
+  })
+
+  it('google_api: catches AIza<35> tokens', () => {
+    const t = 'AIza' + alnum(35)
+    const { text } = scrubFamilies(t, [])
+    assert.ok(text.includes('<REDACTED:google_api>'))
+  })
+
+  it('pem_private_key: catches full block', () => {
+    const t = '-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK...\n-----END RSA PRIVATE KEY-----'
+    const { text } = scrubFamilies(t, [])
+    assert.ok(text.includes('<REDACTED:pem_private_key>'))
+    assert.ok(!text.includes('MIIBOgIBAAJBAK'))
+  })
+
+  it('bearer_header: preserves key, redacts token', () => {
+    const t = 'Authorization: Bearer abcd1234efgh5678'
+    const { text } = scrubFamilies(t, [])
+    assert.ok(text.startsWith('Authorization: Bearer '))
+    assert.ok(text.includes('<REDACTED:bearer_header>'))
+    assert.ok(!text.includes('abcd1234efgh5678'))
+  })
+
+  it('postgres_url: redacts password, keeps user/host', () => {
+    const t = 'DATABASE_URL=postgres://app:hunter2@db.internal:5432/prod'
+    const { text } = scrubFamilies(t, [])
+    assert.ok(text.includes('postgres://app:'))
+    assert.ok(text.includes('@db.internal'))
+    assert.ok(text.includes('<REDACTED:postgres_url>'))
+    assert.ok(!text.includes('hunter2'))
+  })
+
+  it('stripe family: pk_live, rk_test, whsec', () => {
+    const t = [
+      'pk_live_' + alnum(24),
+      'rk_test_' + alnum(24),
+      'whsec_' + alnum(32),
+    ].join(' ')
+    const { text } = scrubFamilies(t, [])
+    assert.ok(text.includes('<REDACTED:stripe_pk>'))
+    assert.ok(text.includes('<REDACTED:stripe_rk>'))
+    assert.ok(text.includes('<REDACTED:stripe_whsec>'))
+  })
+
+  it('npm_token: catches npm_<36>', () => {
+    const t = 'npm_' + alnum(36)
+    const { text } = scrubFamilies(t, [])
+    assert.ok(text.includes('<REDACTED:npm_token>'))
+  })
+
+  it('huggingface: catches hf_<34>', () => {
+    const t = 'hf_' + alnum(34)
+    const { text } = scrubFamilies(t, [])
+    assert.ok(text.includes('<REDACTED:huggingface>'))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 5: redaction instance metadata
+// ---------------------------------------------------------------------------
+describe('phase 5: instance metadata', () => {
+  it('redaction carries prefix=first 4 chars and length=match length', () => {
+    const tok = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'
+    const { redactions } = scrubFamilies(tok, [])
+    const ghp = redactions.find(r => r.family === 'github_pat')
+    assert.ok(ghp.instances)
+    assert.equal(ghp.instances[0].prefix, 'ghp_')
+    assert.equal(ghp.instances[0].length, tok.length)
+    assert.equal(ghp.instances[0].line, 1)
+  })
+
+  it('multiple instances on different lines carry correct line numbers', () => {
+    const t1 = 'ghp_' + alnum(36)
+    const t2 = 'ghp_' + alnum(36).split('').reverse().join('')
+    const { redactions } = scrubFamilies(`first=${t1}\nsecond=${t2}`, [])
+    const ghp = redactions.find(r => r.family === 'github_pat')
+    assert.equal(ghp.count, 2)
+    assert.equal(ghp.instances[0].line, 1)
+    assert.equal(ghp.instances[1].line, 2)
+  })
+})

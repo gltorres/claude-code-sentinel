@@ -187,7 +187,7 @@ const steps = []
 
 // ── Step 3: PostToolUse with sk-ant-api03-… → scrub ───────────────────────────
 {
-  process.stdout.write('Step 3: PostToolUse Bash tool_response contains sk-ant-api03-… → expect additionalContext includes <REDACTED:anthropic>\n')
+  process.stdout.write('Step 3: PostToolUse Bash tool_response contains sk-ant-api03-… → expect short banner naming anthropic\n')
   const s3 = runStep({
     event: 'PostToolUse',
     stdin: {
@@ -195,14 +195,14 @@ const steps = []
       session_id: 'demo-session-001',
       cwd: repoRoot,
       tool_name: 'Bash',
-      tool_response: 'Running deployment... API_KEY=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA done.',
+      tool_response: { stdout: 'Running deployment... API_KEY=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA done.', stderr: '' },
     },
     expect: {
-      additionalContext_includes: '<REDACTED:anthropic>',
+      additionalContext_includes: 'anthropic',
     },
   })
   if (s3.ok) {
-    process.stdout.write(`  PASS  additionalContext contains <REDACTED:anthropic>\n`)
+    process.stdout.write(`  PASS  additionalContext banner names anthropic family\n`)
   } else {
     process.stdout.write(`  FAIL\n${s3.mismatches.join('\n')}\n`)
     failures.push('Step 3')
@@ -224,7 +224,7 @@ const steps = []
       session_id: 'demo-session-001',
       cwd: repoRoot,
       tool_name: 'Bash',
-      tool_response: 'Running deployment... API_KEY=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA done.',
+      tool_response: { stdout: 'Running deployment... API_KEY=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA done.', stderr: '' },
     }, null, 2),
     output: (s3.stdout ?? '') + (s3.stderr ?? ''),
   })

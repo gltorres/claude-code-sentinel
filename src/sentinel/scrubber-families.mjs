@@ -1,9 +1,7 @@
-// scrubber families — Sprint 06.
+// scrubber families — Sprint 06 + Sprint scrubber rebuild.
 
 // Pre-compiled family regexes applied in fixed order.
-// Tag format: <REDACTED:<family>> — no length, no preview (brief line 50).
-// Do NOT reuse or refactor SK_ANT_RE from bash-policy.mjs:5 — different surface,
-// different sigil ([REDACTED] vs <REDACTED:family>). See research §3.2.
+// Tag format: <REDACTED:<family>>.
 const FAMILY_REGEXES = Object.freeze([
   {
     family: 'anthropic',
@@ -12,9 +10,9 @@ const FAMILY_REGEXES = Object.freeze([
   },
   {
     family: 'openai',
-    // Negative lookahead prevents eating sk-ant- tokens (anthropic applied first,
-    // but the lookahead is a belt-and-suspenders guard for out-of-order callers).
-    re: /sk-(?!ant-)[A-Za-z0-9]{40,}/g,
+    // Legacy sk-<40+>, modern sk-proj-<32+>, sk-svcacct-<32+>, sk-admin-<32+>.
+    // (?!ant-) lookahead preserves the anthropic guard.
+    re: /sk-(?!ant-)(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{32,}/g,
     tag: '<REDACTED:openai>',
   },
   {
@@ -28,8 +26,6 @@ const FAMILY_REGEXES = Object.freeze([
     tag: '<REDACTED:aws_akid>',
   },
   {
-    // aws_session_token= key name is preserved; only the value is redacted.
-    // Capture group 1 = the value (runs up to whitespace / quote / & / ;).
     family: 'aws_session',
     re: /aws_session_token=([^\s"'&;]+)/gi,
     tag: '<REDACTED:aws_session>',
@@ -64,81 +60,148 @@ const FAMILY_REGEXES = Object.freeze([
     re: /eyJ[A-Za-z0-9_=-]+\.eyJ[A-Za-z0-9_=-]+\.[A-Za-z0-9_=.+/-]+/g,
     tag: '<REDACTED:jwt>',
   },
+  {
+    family: 'google_api',
+    re: /AIza[0-9A-Za-z_-]{35}/g,
+    tag: '<REDACTED:google_api>',
+  },
+  {
+    family: 'pem_private_key',
+    re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----[\s\S]+?-----END (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/g,
+    tag: '<REDACTED:pem_private_key>',
+  },
+  {
+    family: 'bearer_header',
+    // Authorization: Bearer <token> — capture group 1 = key prefix to keep.
+    re: /([Aa]uthorization:\s*[Bb]earer\s+)([A-Za-z0-9._~+/=-]{8,})/g,
+    tag: '<REDACTED:bearer_header>',
+  },
+  {
+    family: 'stripe_pk',
+    re: /pk_(?:live|test)_[A-Za-z0-9]{24,}/g,
+    tag: '<REDACTED:stripe_pk>',
+  },
+  {
+    family: 'stripe_rk',
+    re: /rk_(?:live|test)_[A-Za-z0-9]{24,}/g,
+    tag: '<REDACTED:stripe_rk>',
+  },
+  {
+    family: 'stripe_whsec',
+    re: /whsec_[A-Za-z0-9]{32,}/g,
+    tag: '<REDACTED:stripe_whsec>',
+  },
+  {
+    family: 'postgres_url',
+    // postgres://user:<password>@host — preserve scheme/user/host, redact password.
+    re: /(postgres(?:ql)?:\/\/[^:\s/@]+:)([^@\s]+)(@)/g,
+    tag: '<REDACTED:postgres_url>',
+  },
+  {
+    family: 'npm_token',
+    re: /npm_[A-Za-z0-9]{36}/g,
+    tag: '<REDACTED:npm_token>',
+  },
+  {
+    family: 'huggingface',
+    re: /hf_[A-Za-z0-9]{34}/g,
+    tag: '<REDACTED:huggingface>',
+  },
 ])
 
-// Apply one regex entry to the working text, counting replacements.
-// aws_session is special: the replacement preserves the key name while
-// redacting only the captured value portion.
-function applyFamily(text, { family, re, tag }) {
-  let count = 0
-  // Reset lastIndex in case the regex object is reused across calls.
-  re.lastIndex = 0
-  let out
-  if (family === 'aws_session') {
-    out = text.replace(re, (_match, _val) => {
-      count++
-      return `aws_session_token=${tag}`
-    })
-  } else {
-    out = text.replace(re, () => {
-      count++
-      return tag
-    })
-  }
-  return { text: out, count }
+const PRESERVE_PREFIX_FAMILIES = new Set(['aws_session', 'bearer_header', 'postgres_url'])
+
+function countLinesUpTo(text, offset) {
+  let n = 0
+  for (let i = 0; i < offset; i++) if (text.charCodeAt(i) === 10) n++
+  return n
 }
 
-// Apply a user-supplied extra pattern entry.
-// Accepts:  string  → regex source, tagged <REDACTED:custom>
-//           {name, pattern}  → tagged <REDACTED:<name>>
-// Malformed regex sources are caught and skipped silently.
+function applyFamily(text, { family, re, tag }) {
+  const instances = []
+  re.lastIndex = 0
+  if (!PRESERVE_PREFIX_FAMILIES.has(family)) {
+    const out = text.replace(re, (match, ...rest) => {
+      const offset = typeof rest[rest.length - 2] === 'number' ? rest[rest.length - 2] : 0
+      instances.push({
+        prefix: match.slice(0, 4),
+        length: match.length,
+        line: countLinesUpTo(text, offset) + 1,
+      })
+      return tag
+    })
+    return { text: out, instances }
+  }
+  const out = text.replace(re, (...args) => {
+    // args: [match, g1, g2, ..., offset, full]
+    const match = args[0]
+    const offset = args[args.length - 2]
+    instances.push({
+      prefix: match.slice(0, 4),
+      length: match.length,
+      line: countLinesUpTo(text, offset) + 1,
+    })
+    if (family === 'aws_session') return `aws_session_token=${tag}`
+    if (family === 'bearer_header') return `${args[1]}${tag}`
+    if (family === 'postgres_url') return `${args[1]}${tag}${args[3]}`
+    return tag
+  })
+  return { text: out, instances }
+}
+
 function applyExtra(text, entry) {
-  let src, tag
+  let src, tag, name
   if (typeof entry === 'string') {
     src = entry
     tag = '<REDACTED:custom>'
+    name = 'custom'
   } else if (entry && typeof entry === 'object' && entry.name && entry.pattern) {
     src = entry.pattern
     tag = `<REDACTED:${entry.name}>`
+    name = entry.name
   } else {
-    return { text, count: 0 }
+    return { text, instances: [], name: null }
   }
   let re
   try {
     re = new RegExp(src, 'g')
   } catch {
-    return { text, count: 0 }
+    return { text, instances: [], name: null }
   }
-  let count = 0
-  const out = text.replace(re, () => {
-    count++
+  const instances = []
+  const out = text.replace(re, (match, ...rest) => {
+    const offset = typeof rest[rest.length - 2] === 'number' ? rest[rest.length - 2] : 0
+    instances.push({
+      prefix: match.slice(0, 4),
+      length: match.length,
+      line: countLinesUpTo(text, offset) + 1,
+    })
     return tag
   })
-  return { text: out, count }
+  return { text: out, instances, name }
 }
 
-// Scan `text` for all 11 hardcoded credential families and any `extraPatterns`.
+// Scan `text` for all hardcoded credential families and any `extraPatterns`.
 // Returns:
 //   { text: <scrubbed string>,
-//     redactions: [{ family: string, count: number }, ...] }
-// Only families with count >= 1 appear in redactions.
-// The returned text is suitable for the next pass (entropy scanner in spec 3).
+//     redactions: [{ family, count, instances: [{prefix,length,line}] }, ...] }
 export function scrubFamilies(text, extraPatterns) {
   let working = String(text ?? '')
   const redactions = []
 
   for (const entry of FAMILY_REGEXES) {
-    const { text: next, count } = applyFamily(working, entry)
+    const { text: next, instances } = applyFamily(working, entry)
     working = next
-    if (count > 0) redactions.push({ family: entry.family, count })
+    if (instances.length > 0) {
+      redactions.push({ family: entry.family, count: instances.length, instances })
+    }
   }
 
   if (Array.isArray(extraPatterns)) {
     for (const entry of extraPatterns) {
-      const { text: next, count } = applyExtra(working, entry)
-      if (count > 0) {
-        const name = (typeof entry === 'object' && entry?.name) ? entry.name : 'custom'
-        redactions.push({ family: name, count })
+      const { text: next, instances, name } = applyExtra(working, entry)
+      if (instances.length > 0) {
+        redactions.push({ family: name, count: instances.length, instances })
         working = next
       }
     }

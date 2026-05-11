@@ -1,0 +1,8 @@
+{
+  "event": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_response": "NPM_TOKEN=npm_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "expect": { "decision": "allow", "rule": "scrubber.npm_token", "matched": null }
+}

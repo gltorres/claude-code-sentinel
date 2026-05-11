@@ -47,12 +47,15 @@ with a synthetic event payload — no Claude API key or live session required.
   "session_id": "demo-session-001",
   "cwd": "/Users/alejtr/workspace/apps/claude-code-sentinel",
   "tool_name": "Bash",
-  "tool_response": "Running deployment... API_KEY=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA done."
+  "tool_response": {
+    "stdout": "Running deployment... API_KEY=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA done.",
+    "stderr": ""
+  }
 }
 ```
 
 ```text
-{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Running deployment... API_KEY=<REDACTED:anthropic> done."}}
+{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Sentinel: scrubbed 1 secret(s) — 1 anthropic. Do not echo redacted regions."}}
 ```
 
 ## Step 4 — review: /sentinel-review recent 3
@@ -62,9 +65,9 @@ node src/sentinel/review-cli.mjs recent 3
 ```
 
 ```text
-2026-05-11T16:10:09.805Z | scrub | scrubber.anthropic |  | {"family":"anthropic","count":1}
-2026-05-11T16:10:09.748Z | ask | registry.too_new | huggingface-cli-utils | {"command_prefix":"pip install huggingface-cli-utils","matched_segment":"pip install huggingface-cli-utils"}
-2026-05-11T16:10:09.694Z | block | bash.cat | **/.env | {"command_prefix":"cat .env","matched_segment":"cat .env"}
+2026-05-11T21:21:00.124Z | scrub | scrubber.anthropic |  | {"family":"anthropic","count":1,"prefix":"sk-a","length":49,"line":1}
+2026-05-11T21:21:00.081Z | ask | registry.too_new | huggingface-cli-utils | {"command_prefix":"pip install huggingface-cli-utils","matched_segment":"pip install huggingface-cli-utils"}
+2026-05-11T21:21:00.036Z | block | bash.cat | **/.env | {"command_prefix":"cat .env","matched_segment":"cat .env"}
 ```
 
 ## Caveat — next-turn scrubber

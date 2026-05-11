@@ -52,7 +52,20 @@
   },
   "scrubber": {
     "enabled": true,
-    "extraPatterns": []
+    "extraPatterns": [],
+    "skipPaths": [
+      "**/package-lock.json",
+      "**/yarn.lock",
+      "**/pnpm-lock.yaml",
+      "**/Cargo.lock",
+      "**/Gemfile.lock",
+      "**/poetry.lock",
+      "**/*.min.js",
+      "**/*.min.css",
+      "**/*.map"
+    ],
+    "entropyThreshold": 4.0,
+    "entropyMinLength": 32
   },
   "audit": {
     "path": null,
