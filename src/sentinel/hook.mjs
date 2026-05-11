@@ -7,6 +7,8 @@ import { loadConfig } from './config.mjs'
 import { writeAuditLine } from './audit.mjs'
 import { matchPath } from './paths.mjs'
 import { evaluateBash } from './bash-policy.mjs'
+import { evaluateRegistry } from './registry-policy.mjs'
+import { resolveCachePath, loadCache, flushCache } from './registry-cache.mjs'
 
 const EVENT_NAMES = ['PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd']
 const MIN_NODE = '20.10.0'
@@ -35,6 +37,117 @@ function emit(obj, decisionCtx = {}) {
   try { writeAuditLine(config, which, event, decisionCtx) } catch {}
   process.stdout.write(JSON.stringify(obj) + '\n')
   process.exit(0)
+}
+
+export async function runBashBranch({ command, cwd, home, config, fetchFn, now, cache, emit: emitFn, envelope: envelopeFn }) {
+  const truncate = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s ?? ''))
+
+  let bashResult
+  try {
+    bashResult = evaluateBash({ command, cwd, home, config })
+  } catch {
+    bashResult = { decision: 'allow', rule: null, matched: null, matched_segment: null }
+  }
+
+  if (bashResult.decision === 'deny') {
+    const seg = truncate(bashResult.matched_segment, 40)
+    const reason =
+      BANNER_PREFIX +
+      `bash segment '${seg}' reads ${bashResult.matched} (${bashResult.rule})`
+    return emitFn(
+      envelopeFn('PreToolUse', {
+        permissionDecision: 'deny',
+        permissionDecisionReason: reason,
+      }),
+      {
+        event: 'block',
+        decision: 'deny',
+        rule: bashResult.rule,
+        matched: bashResult.matched,
+        matched_segment: bashResult.matched_segment,
+      },
+    )
+  }
+
+  if (bashResult.decision === 'ask') {
+    const reason =
+      BANNER_PREFIX + 'bash shape not statically analysable; confirm before running'
+    return emitFn(
+      envelopeFn('PreToolUse', {
+        permissionDecision: 'ask',
+        permissionDecisionReason: reason,
+      }),
+      {
+        event: 'ask',
+        decision: 'ask',
+        rule: bashResult.rule || 'bash.exotic',
+        matched: null,
+        matched_segment: null,
+      },
+    )
+  }
+
+  // bashResult.decision === 'allow' — proceed to registry check
+  let reg
+  try {
+    reg = await evaluateRegistry({ command, config, fetchFn, cache, now })
+  } catch {
+    reg = { decision: 'allow', rule: 'registry.unavailable', matched: null, matched_segment: null, reason: 'registry check failed; allowing fail-open' }
+  }
+
+  flushCache(resolveCachePath(process.env), cache, (config?.registry?.cacheMaxEntries) ?? 1024)
+
+  if (reg.decision === 'deny') {
+    return emitFn(
+      envelopeFn('PreToolUse', {
+        permissionDecision: 'deny',
+        permissionDecisionReason: BANNER_PREFIX + reg.reason,
+      }),
+      {
+        event: 'block',
+        decision: 'deny',
+        rule: reg.rule,
+        matched: reg.matched,
+        matched_segment: reg.matched_segment,
+      },
+    )
+  }
+
+  if (reg.decision === 'ask') {
+    return emitFn(
+      envelopeFn('PreToolUse', {
+        permissionDecision: 'ask',
+        permissionDecisionReason: BANNER_PREFIX + reg.reason,
+      }),
+      {
+        event: 'ask',
+        decision: 'ask',
+        rule: reg.rule,
+        matched: reg.matched,
+        matched_segment: reg.matched_segment,
+      },
+    )
+  }
+
+  // reg.decision === 'allow'
+  if (reg.rule === 'registry.unavailable') {
+    return emitFn(
+      envelopeFn('PreToolUse', { permissionDecision: 'allow' }),
+      {
+        event: 'warn',
+        decision: 'allow',
+        rule: 'registry.unavailable',
+        matched: null,
+        matched_segment: null,
+      },
+    )
+  }
+
+  // Silent allow — widely-used package, clean registry check
+  return emitFn(
+    envelopeFn('PreToolUse', { permissionDecision: 'allow' }),
+    undefined,
+  )
 }
 
 // --self-test branch: load fixtures, run matchPath in-process, report timing
@@ -165,58 +278,23 @@ switch (which) {
         }))
       }
     } else if (tool === 'Bash') {
-      // Local helper: cap reason strings to avoid oversized stdout lines
-      const truncate = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s ?? ''))
       const command = (event.tool_input && event.tool_input.command) || ''
-      let bashResult
-      try {
-        bashResult = evaluateBash({ command, cwd, home: homedir(), config })
-      } catch {
-        bashResult = { decision: 'allow', rule: null, matched: null, matched_segment: null }
-      }
-      if (bashResult.decision === 'deny') {
-        const seg = truncate(bashResult.matched_segment, 40)
-        const reason =
-          BANNER_PREFIX +
-          `bash segment '${seg}' reads ${bashResult.matched} (${bashResult.rule})`
-        emit(
-          envelope('PreToolUse', {
-            permissionDecision: 'deny',
-            permissionDecisionReason: reason,
-          }),
-          {
-            event: 'block',
-            decision: 'deny',
-            rule: bashResult.rule,
-            matched: bashResult.matched,
-            matched_segment: bashResult.matched_segment,
-          },
-        )
-      } else if (bashResult.decision === 'ask') {
-        const reason =
-          BANNER_PREFIX + 'bash shape not statically analysable; confirm before running'
-        emit(
-          envelope('PreToolUse', {
-            permissionDecision: 'ask',
-            permissionDecisionReason: reason,
-          }),
-          {
-            event: 'ask',
-            decision: 'ask',
-            rule: bashResult.rule || 'bash.exotic',
-            matched: null,
-            matched_segment: null,
-          },
-        )
-      } else {
-        emit(
-          envelope('PreToolUse', {
-            permissionDecision: 'allow',
-            permissionDecisionReason: BANNER_PREFIX + 'bash allowed',
-          }),
-          { event: 'warn', decision: 'allow', rule: null, matched: null, matched_segment: null },
-        )
-      }
+      const cachePath = resolveCachePath(process.env)
+      const cache = loadCache(cachePath)
+      await (async () => {
+        await runBashBranch({
+          command,
+          cwd,
+          home: homedir(),
+          config,
+          fetchFn: globalThis.fetch,
+          now: Date.now(),
+          cache,
+          emit,
+          envelope,
+        })
+      })()
+      return // async IIFE calls emit() which calls process.exit(0); this return is belt-and-suspenders
     } else {
       // Unrecognised tool names: scaffold-allow (unchanged from Sprint 02)
       emit(envelope('PreToolUse', {
