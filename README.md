@@ -100,6 +100,8 @@ Every block, ask, scrub, and warn is appended to `~/.claude/sentinel/audit.jsonl
 /sentinel-review config      # effective config with per-key source attribution
 ```
 
+**Audit-log path resolution.** Sentinel resolves the audit log path in this order: (1) explicit `config.audit.path`, (2) `$CLAUDE_PLUGIN_DATA/audit.jsonl` (set automatically by Claude Code when invoking plugin hooks), (3) fallback `~/.claude/sentinel/audit.jsonl`. Live audit lines from a running Claude Code session will typically land at path (2); `make demo` and offline runs land at path (3). Use `/sentinel-review` rather than reading the JSONL directly — the CLI follows the same priority order and always reads from the same file the hook is writing to.
+
 For a full forensic report on a flagged entry, invoke the investigator subagent:
 
 ```
@@ -130,6 +132,29 @@ Additional non-goals for v1:
 - Defending against a compromised Node.js binary or OS-level rootkit.
 - Replacing a secrets-scanning CI step (e.g. `git-secrets`, `trufflehog`) — Sentinel is a runtime backstop, not a pre-commit gate.
 - Network-egress filtering beyond registry package verification.
+
+## Debugging Sentinel
+
+When inspecting Sentinel's behaviour from inside a running Claude Code session, prefer one shell command per `Bash` tool call. The bash-walker tokenises the entire compound command before path-matching, and a quoted wrapper string that *mentions* a denied path can trigger the deny rule even when no actual file would be read at runtime:
+
+```bash
+# Denied — the walker sees ".env" inside the echo argument and treats
+# the whole compound command as touching a secret:
+echo "testing cat .env behaviour"; node script.mjs
+
+# Equivalent isolated invocations both succeed:
+echo "testing cat behaviour"
+node script.mjs
+```
+
+The asymmetry is intentional: `paths.deny` patterns match permissively (`**/.env.*` matches any token containing `.env.` plus trailing characters), while `paths.allow` patterns match exactly (`**/.env.test` requires the token to end in `.env.test`). This keeps deny paranoid and allow precise — desirable for a security tool, surprising when you are meta-debugging the tool itself.
+
+If you need to inspect a hook decision against a specific event, prefer the standalone dry-run mode over crafting bash invocations that mention denied paths:
+
+```bash
+echo '{"tool_name":"Bash","tool_input":{"command":"cat .env.test"},"cwd":"/path/to/project"}' \
+  | node src/sentinel/hook.mjs PreToolUse --dry-run
+```
 
 ## Data refresh
 

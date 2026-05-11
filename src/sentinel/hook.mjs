@@ -449,7 +449,18 @@ await (async () => {
           process.stdout.write(JSON.stringify(envelope('PostToolUse', { additionalContext: '' })) + '\n')
           process.exit(0)
         }
-        const text = String(event.tool_response ?? '')
+        const rawResponse = event.tool_response
+        let text
+        if (rawResponse == null) {
+          text = ''
+        } else if (typeof rawResponse === 'string') {
+          text = rawResponse
+        } else {
+          // Bash/Read responses arrive as structured objects ({stdout, stderr, ...}; {file:{content,...}}).
+          // JSON.stringify exposes every textual field to the scrubber's family/entropy detectors
+          // without losing data. Fail-open to '' if stringification throws (circular ref, etc.).
+          try { text = JSON.stringify(rawResponse) } catch { text = '' }
+        }
         const result = scrubResponse({ text, config })
         for (const { family, count } of result.redactions) {
           try {

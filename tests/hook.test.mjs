@@ -10,11 +10,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const HOOK = resolve(__dirname, '..', 'src', 'sentinel', 'hook.mjs')
 
 function runHook(args, input = '{}') {
-  return spawnSync(process.execPath, [HOOK, ...args], {
-    input,
-    encoding: 'utf8',
-    timeout: 5000,
-  })
+  // Isolate every hook invocation to a temp CLAUDE_PLUGIN_DATA dir so
+  // tests never write to the fallback ~/.claude/sentinel/audit.jsonl path.
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-runhook-'))
+  try {
+    return spawnSync(process.execPath, [HOOK, ...args], {
+      input,
+      encoding: 'utf8',
+      timeout: 5000,
+      env: { ...process.env, CLAUDE_PLUGIN_DATA: dataDir },
+    })
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
 }
 
 function runHookEnv(args, input = '{}', env = {}) {
@@ -876,5 +884,66 @@ test('--dry-run with PostToolUse event exits 1 with documented stderr message', 
   assert.ok(
     r.stderr.includes('dry-run only supports PreToolUse today'),
     `expected documented error in stderr, got: ${r.stderr.trim()}`,
+  )
+})
+
+// ─── Bug 2 regression: PostToolUse must serialise object tool_response ────────
+// Before the fix, String({stdout:'...'}) yielded "[object Object]", silently
+// disabling the scrubber for the most common Bash/Read responses.
+test('PostToolUse coerces object tool_response to scrub-able JSON (not "[object Object]")', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-postobj-'))
+  try {
+    const fakeKey = 'sk-ant-api03-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'
+    const input = JSON.stringify({
+      session_id: 'postobj-1',
+      cwd: '/tmp/project',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hello' },
+      tool_response: { stdout: fakeKey, stderr: '', interrupted: false },
+    })
+    const r = runHookEnv(['PostToolUse'], input, { CLAUDE_PLUGIN_DATA: dataDir })
+    assert.equal(r.status, 0, `hook exited ${r.status}; stderr: ${r.stderr}`)
+    const out = JSON.parse(r.stdout.trim())
+    const ctx = out.hookSpecificOutput.additionalContext
+    assert.equal(typeof ctx, 'string', 'additionalContext must be a string')
+    assert.notStrictEqual(
+      ctx,
+      '[object Object]',
+      'PostToolUse must not emit literal "[object Object]"',
+    )
+    assert.ok(
+      !ctx.includes(fakeKey),
+      `raw secret must be redacted from scrubbed output, got: ${ctx}`,
+    )
+    assert.ok(
+      ctx.includes('<REDACTED:anthropic>'),
+      `scrubber must redact the embedded sk-ant- token, got: ${ctx}`,
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// ─── Bug 1 regression: tests must never pollute the fallback audit path ──────
+// The fallback path is ~/.claude/sentinel/audit.jsonl. Any test that spawns the
+// hook subprocess without setting CLAUDE_PLUGIN_DATA or config.audit.path will
+// leak audit lines there. This guard runs a representative hook invocation
+// (one that previously polluted) through `runHook` and asserts the fallback
+// file's byte count is unchanged.
+test('test suite never writes to the fallback ~/.claude/sentinel/audit.jsonl', () => {
+  const fallback = join(homedir(), '.claude', 'sentinel', 'audit.jsonl')
+  let before
+  try { before = statSync(fallback).size } catch { before = null }
+  // Representative invocation via the bare `runHook` helper, which previously
+  // omitted CLAUDE_PLUGIN_DATA and reached the audit-writing else-branch.
+  const r = runHook(['SessionEnd'], JSON.stringify({ session_id: 'pollution-guard', cwd: '/tmp' }))
+  assert.equal(r.status, 0)
+  let after
+  try { after = statSync(fallback).size } catch { after = null }
+  if (before == null && after == null) return // fallback never existed; nothing leaked
+  assert.equal(
+    after ?? 0,
+    before ?? 0,
+    `test wrote ${(after ?? 0) - (before ?? 0)} bytes to fallback audit path ${fallback}`,
   )
 })
