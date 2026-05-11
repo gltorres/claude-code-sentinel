@@ -296,7 +296,7 @@ test('--self-test: per-fixture in-process latency < 20 ms', () => {
   const fixtureCount = Number(match[1])
   const totalMs = Number(match[2])
   assert.ok(fixtureCount > 0, 'expected at least one fixture')
-  assert.ok(fixtureCount >= 41, `expected >= 41 fixtures (paths + bash + registry + scrubber), got ${fixtureCount}`)
+  assert.ok(fixtureCount >= 43, `expected >= 43 fixtures (paths + bash + registry + scrubber + session), got ${fixtureCount}`)
   const perFixtureMs = totalMs / fixtureCount
   assert.ok(
     perFixtureMs < 20,
@@ -311,8 +311,8 @@ test('--self-test: scrubber bucket present and exits 0', () => {
   assert.ok(match, `unexpected stderr format: ${r.stderr}`)
   const fixtureCount = Number(match[1])
   assert.ok(
-    fixtureCount >= 41,
-    `expected >= 41 fixtures (paths + bash + registry + scrubber), got ${fixtureCount}`
+    fixtureCount >= 43,
+    `expected >= 43 fixtures (paths + bash + registry + scrubber + session), got ${fixtureCount}`
   )
 })
 
