@@ -72,7 +72,7 @@ function isCountBounded(segment) {
 // Returns:
 //   { decision: 'allow', rule: null, matched: null, matched_segment: null }
 //   { decision: 'deny',  rule: string, matched: string, matched_segment: string }
-//   { decision: 'ask',   rule: 'bash.exotic', matched: null, matched_segment: null }
+//   { decision: 'ask',   rule: null, matched: null, matched_segment: null }
 //
 // Options:
 //   command {string}  — raw bash command string from tool_input.command
@@ -94,7 +94,7 @@ export function evaluateBash({ command, cwd, home, config } = {}) {
   }
 
   if (walked.exotic) {
-    return { decision: 'ask', rule: 'bash.exotic', matched: null, matched_segment: null }
+    return { decision: 'ask', rule: null, matched: null, matched_segment: null }
   }
 
   for (const segment of walked.segments) {

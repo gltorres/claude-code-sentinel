@@ -71,7 +71,7 @@ export function walk(commandString) {
     }
     const command = currentWords[0] ?? ''
     const args = currentWords.slice(1)
-    const raw = currentRawParts.join('').trim()
+    const raw = currentWords.join(' ')
     if (command !== '') {
       segments.push({ command, args, redirects: currentRedirects, raw })
     }

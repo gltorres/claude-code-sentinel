@@ -94,7 +94,7 @@ test('echo hello && wc -l .env is allowed', () => {
 test('heredoc returns ask (exotic shape)', () => {
   const r = evaluateBash({ command: 'cat <<EOF\nhello\nEOF', ...OPTS })
   assert.equal(r.decision, 'ask')
-  assert.equal(r.rule, 'bash.exotic')
+  assert.equal(r.rule, null)
   assert.equal(r.matched, null)
   assert.equal(r.matched_segment, null)
 })
