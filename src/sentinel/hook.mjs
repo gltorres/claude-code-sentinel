@@ -11,6 +11,7 @@ import { evaluateBash } from './bash-policy.mjs'
 import { evaluateRegistry } from './registry-policy.mjs'
 import { resolveCachePath, loadCache, flushCache } from './registry-cache.mjs'
 import { scrubResponse } from './scrubber-policy.mjs'
+import { summariseAuditWindow, composeBanner } from './session.mjs'
 
 const EVENT_NAMES = ['PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd']
 const MIN_NODE = '20.10.0'
@@ -404,9 +405,17 @@ await (async () => {
         process.exit(0)
       }
     }
-    case 'SessionStart':
-      emit(envelope('SessionStart', { additionalContext: '' }))
+    case 'SessionStart': {
+      let banner
+      try {
+        const summary = summariseAuditWindow({ config, now: Date.now() })
+        banner = composeBanner(summary)
+      } catch {
+        banner = 'Sentinel active — no events yet. PostToolUse scrubbing is next-turn-only; PreToolUse is the primary defence.'
+      }
+      emit(envelope('SessionStart', { additionalContext: banner }))
       break
+    }
     case 'SessionEnd':
       emit(
         envelope('SessionEnd', { additionalContext: '' }),
