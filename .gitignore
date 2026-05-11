@@ -5,3 +5,5 @@ research/
 specs/
 node_modules/
 demo/audit.jsonl
+tools/
+__pycache__/
