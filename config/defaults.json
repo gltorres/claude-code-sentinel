@@ -1,0 +1,11 @@
+{
+  "paths": {},
+  "bash": {},
+  "registry": {},
+  "ecosystems": {},
+  "scrubber": {},
+  "audit": {
+    "path": null,
+    "maxSizeMb": 10
+  }
+}
