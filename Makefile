@@ -14,7 +14,7 @@ test:
 demo:
 	@mkdir -p demo
 	@rm -f demo/audit.jsonl demo/transcript.md
-	@CLAUDE_PLUGIN_DATA=$(CURDIR)/demo/ node tools/demo.mjs --write-transcript=demo/transcript.md
+	@CLAUDE_PLUGIN_DATA=$(CURDIR)/demo/ node scripts/demo.mjs --write-transcript=demo/transcript.md
 	@echo "demo: ok — transcript written to demo/transcript.md"
 
 clean-demo:
@@ -22,4 +22,4 @@ clean-demo:
 	@echo "clean-demo: ok"
 
 refresh-data:
-	@node tools/refresh_top_packages.mjs
+	@node scripts/refresh_top_packages.mjs

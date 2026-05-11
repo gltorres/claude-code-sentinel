@@ -1,5 +1,5 @@
 // Demo driver tests — Sprint 10, Spec 02.
-// Invokes tools/demo.mjs as a subprocess and asserts exit code, stdout markers,
+// Invokes scripts/demo.mjs as a subprocess and asserts exit code, stdout markers,
 // and that demo/audit.jsonl contains exactly 3 lines after the run.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -9,7 +9,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const DRIVER    = join(__dirname, '..', 'tools', 'demo.mjs')
+const DRIVER    = join(__dirname, '..', 'scripts', 'demo.mjs')
 const repoRoot  = join(__dirname, '..')
 const auditPath = join(repoRoot, 'demo', 'audit.jsonl')
 

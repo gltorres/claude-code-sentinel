@@ -62,9 +62,9 @@ node src/sentinel/review-cli.mjs recent 3
 ```
 
 ```text
-2026-05-11T08:22:21.002Z | scrub | scrubber.anthropic |  | {"family":"anthropic","count":1}
-2026-05-11T08:22:20.950Z | ask | registry.too_new | huggingface-cli-utils | {"command_prefix":"pip install huggingface-cli-utils","matched_segment":"pip install huggingface-cli-utils"}
-2026-05-11T08:22:20.898Z | block | bash.cat | **/.env | {"command_prefix":"cat .env","matched_segment":"cat .env"}
+2026-05-11T16:10:13.245Z | scrub | scrubber.anthropic |  | {"family":"anthropic","count":1}
+2026-05-11T16:10:13.191Z | ask | registry.too_new | huggingface-cli-utils | {"command_prefix":"pip install huggingface-cli-utils","matched_segment":"pip install huggingface-cli-utils"}
+2026-05-11T16:10:13.135Z | block | bash.cat | **/.env | {"command_prefix":"cat .env","matched_segment":"cat .env"}
 ```
 
 ## Caveat — next-turn scrubber

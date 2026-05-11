@@ -23,7 +23,7 @@ jobs:
           node-version: '20'
 
       - name: Refresh top-500 package lists
-        run: node tools/refresh_top_packages.mjs
+        run: node scripts/refresh_top_packages.mjs
 
       - name: Check for changed data files
         id: check

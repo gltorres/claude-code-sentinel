@@ -7,6 +7,6 @@
   "scripts": {
     "test": "node --test tests/",
     "self-test": "node src/sentinel/hook.mjs --self-test",
-    "refresh-data": "node tools/refresh_top_packages.mjs"
+    "refresh-data": "node scripts/refresh_top_packages.mjs"
   }
 }

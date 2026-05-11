@@ -152,7 +152,7 @@ make refresh-data
 Or equivalently:
 
 ```bash
-node tools/refresh_top_packages.mjs
+node scripts/refresh_top_packages.mjs
 ```
 
 Each run fetches the current top-500 lists from upstream sources (npm download stats, PyPI top-30-days JSON, crates.io downloads API), normalises each list (lowercase, deduplicated, sorted), and writes the result atomically to `src/sentinel/data/`. A summary line is printed per ecosystem on success.
