@@ -26,6 +26,13 @@ function resolveAuditPath(config) {
 // Build a tool-specific input summary that never echoes raw tool_input or tool_response.
 // Each branch returns the minimum data needed to reconstruct what happened.
 export function summariseInput(hookEvent, tool, eventJson, decisionCtx = {}) {
+  if (hookEvent === 'PostToolUse' && eventJson.scrub_family != null) {
+    // PostToolUse scrub events: log what family was redacted and how many times
+    return {
+      family: eventJson.scrub_family ?? null,
+      count: eventJson.scrub_count ?? 0,
+    }
+  }
   if (tool === 'Read' || tool === 'Edit' || tool === 'Grep' || tool === 'Glob') {
     return {
       path: eventJson.tool_input?.file_path ?? eventJson.tool_input?.notebook_path ?? eventJson.tool_input?.path ?? null,
@@ -44,13 +51,6 @@ export function summariseInput(hookEvent, tool, eventJson, decisionCtx = {}) {
     return {
       command_prefix: scrubbed,
       matched_segment: decisionCtx?.matched_segment ?? null,
-    }
-  }
-  if (hookEvent === 'PostToolUse' && eventJson.scrub_family != null) {
-    // PostToolUse scrub events: log what family was redacted and how many times
-    return {
-      family: eventJson.scrub_family ?? null,
-      count: eventJson.scrub_count ?? 0,
     }
   }
   return {}

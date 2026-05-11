@@ -49,7 +49,10 @@
     "pypi": true,
     "crates": true
   },
-  "scrubber": {},
+  "scrubber": {
+    "enabled": true,
+    "extraPatterns": []
+  },
   "audit": {
     "path": null,
     "maxSizeMb": 10

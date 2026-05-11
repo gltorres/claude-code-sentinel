@@ -10,6 +10,7 @@ import { matchPath } from './paths.mjs'
 import { evaluateBash } from './bash-policy.mjs'
 import { evaluateRegistry } from './registry-policy.mjs'
 import { resolveCachePath, loadCache, flushCache } from './registry-cache.mjs'
+import { scrubResponse } from './scrubber-policy.mjs'
 
 const EVENT_NAMES = ['PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd']
 const MIN_NODE = '20.10.0'
@@ -162,7 +163,7 @@ if (process.argv.includes('--self-test')) {
       return undefined
     }
 
-    const fixtureDirs = ['paths', 'bash', 'registry']
+    const fixtureDirs = ['paths', 'bash', 'registry', 'scrubber']
     const selfTestConfig = loadConfig()
     let failures = 0
     let count = 0
@@ -224,6 +225,20 @@ if (process.argv.includes('--self-test')) {
             cache,
             now: fixture.now ?? Date.now(),
           })
+        } else if (bucket === 'scrubber') {
+          const text = String(fixtureEvent.tool_response ?? '')
+          const fixtureConfig = fixture.config ?? selfTestConfig
+          const result = scrubResponse({ text, config: fixtureConfig })
+          // Map scrubResponse result to the shape the comparator expects.
+          // rule: first family that fired (prefixed), or null if none.
+          // decision: always 'allow' (PostToolUse is additive-only).
+          // matched: always null (the matched value is the secret — never log it).
+          const firstFamily = result.redactions.length > 0 ? result.redactions[0].family : null
+          actual = {
+            decision: result.decision,
+            rule: firstFamily != null ? 'scrubber.' + firstFamily : null,
+            matched: result.matched,
+          }
         }
         const expectKeys = Object.keys(fixtureExpect)
         const pass = expectKeys.every(k => (actual[k] ?? null) === (fixtureExpect[k] ?? null))
@@ -363,9 +378,32 @@ await (async () => {
       }
       break
     }
-    case 'PostToolUse':
-      emit(envelope('PostToolUse', { additionalContext: '' }))
-      break
+    case 'PostToolUse': {
+      try {
+        if (config?.scrubber?.enabled === false) {
+          process.stdout.write(JSON.stringify(envelope('PostToolUse', { additionalContext: '' })) + '\n')
+          process.exit(0)
+        }
+        const text = String(event.tool_response ?? '')
+        const result = scrubResponse({ text, config })
+        for (const { family, count } of result.redactions) {
+          try {
+            writeAuditLine(
+              config,
+              'PostToolUse',
+              { ...event, scrub_family: family, scrub_count: count },
+              { event: 'scrub', decision: 'allow', rule: 'scrubber.' + family, matched: null },
+            )
+          } catch {}
+        }
+        process.stdout.write(JSON.stringify(envelope('PostToolUse', { additionalContext: result.redacted })) + '\n')
+        process.exit(0)
+      } catch {
+        // Fail-open: scrubber crash must never block the tool turn
+        process.stdout.write(JSON.stringify(envelope('PostToolUse', { additionalContext: '' })) + '\n')
+        process.exit(0)
+      }
+    }
     case 'SessionStart':
       emit(envelope('SessionStart', { additionalContext: '' }))
       break

@@ -1,0 +1,11 @@
+{
+  "event": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_response": "API_KEY=sk-ant-api03-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "config": {
+    "scrubber": { "enabled": false }
+  },
+  "expect": { "decision": "allow", "rule": null, "matched": null }
+}

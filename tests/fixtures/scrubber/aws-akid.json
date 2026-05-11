@@ -1,0 +1,8 @@
+{
+  "event": {
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Bash",
+    "tool_response": "export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+  },
+  "expect": { "decision": "allow", "rule": "scrubber.aws_akid", "matched": null }
+}

@@ -19,6 +19,8 @@ Sentinel is a hook-first plugin. All defenses run as `PreToolUse` / `PostToolUse
 | `SessionStart` | `startup\|resume\|clear` | One-line advisory showing blocks / near-misses since last session |
 | `SessionEnd` | — | Append structured audit line to `~/.claude/sentinel/audit.jsonl` |
 
+> **Output scrubber — next-turn backstop, not in-turn redaction.** By the time the `PostToolUse` hook runs, the raw tool result has already been delivered to the model's context window and written to the on-disk JSONL transcript. The `additionalContext` field is *additive*: it injects extra text into the model's next turn; it does not replace, mutate, or erase the tool result the model already received. The scrubber therefore stops a leaked credential from being *re-quoted, summarised, or memorised* across subsequent turns — it does not stop the raw value from reaching the model in this turn. For true in-turn prevention, rely on the `PreToolUse` path-deny rules (Sprint 03) and bash-exfil-deny rules (Sprint 04), which block the tool call before the result is ever produced.
+
 ## Status
 
 Early development. Not yet installable.
