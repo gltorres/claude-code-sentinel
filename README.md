@@ -190,3 +190,7 @@ Each run fetches the current top-500 lists from upstream sources (npm download s
 ### What the data is used for
 
 `agents/sentinel-investigator.md` (Mode A, step 3, typosquat distance check) computes the Levenshtein distance between the candidate package name and every name in the relevant ecosystem's bundled list. A distance of 1 or 2 from a popular package name gets flagged as a potential typosquat. The bundled lists are also used by `src/sentinel/levenshtein.mjs` in unit tests.
+
+## Build your own plugin
+
+Want to build a Claude Code plugin of your own? See [docs/build-your-plugin.md](docs/build-your-plugin.md) for a six-step walkthrough that uses this repo's layout as a working example.
