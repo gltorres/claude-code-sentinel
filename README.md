@@ -25,6 +25,36 @@ Sentinel is a hook-first plugin. All defenses run as `PreToolUse` / `PostToolUse
 
 Early development. Not yet installable.
 
+## Data refresh
+
+The investigator agent's typosquat check compares a candidate package name against bundled lists of the 500 most-downloaded packages per ecosystem (`src/sentinel/data/top_packages_{npm,pypi,crates}.json`). These lists are static snapshots that ship with the plugin and must be refreshed periodically to stay accurate as the ecosystem's popular-package roster evolves.
+
+### Automatic cadence
+
+A GitHub Actions workflow (`.github/workflows/refresh-top-packages.yml`) runs automatically on the **first of every month at 06:00 UTC**. If any of the three data files changed, the workflow opens a pull request with branch name `chore/refresh-top-packages-<run_number>` for human review. No data file is committed automatically without a PR.
+
+The workflow can also be triggered manually from the Actions UI (`workflow_dispatch`) at any time.
+
+### Manual fallback
+
+To refresh the data locally without waiting for the monthly cron:
+
+```bash
+make refresh-data
+```
+
+Or equivalently:
+
+```bash
+node tools/refresh_top_packages.mjs
+```
+
+Each run fetches the current top-500 lists from upstream sources (npm download stats, PyPI top-30-days JSON, crates.io downloads API), normalises each list (lowercase, deduplicated, sorted), and writes the result atomically to `src/sentinel/data/`. A summary line is printed per ecosystem on success.
+
+### What the data is used for
+
+`agents/sentinel-investigator.md` (Mode A, step 3 — typosquat distance check) computes the Levenshtein distance between the candidate package name and every name in the relevant ecosystem's bundled list. A distance of 1 or 2 from a popular package name is flagged as a potential typosquat. The bundled lists are also used by `src/sentinel/levenshtein.mjs` in unit tests.
+
 ## License
 
 TBD
@@ -36,12 +66,6 @@ TBD
 /plugin install sentinel@claude-code-sentinel
 /reload-plugins
 ```
-
-## Data Refresh
-
-Run `make refresh-data` (or `npm run refresh-data`) to pull the latest top-500
-package lists from upstream sources and rewrite the bundled JSON files under
-`src/sentinel/data/`.
 
 ## Investigator agent
 

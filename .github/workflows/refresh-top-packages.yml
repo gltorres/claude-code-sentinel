@@ -1,0 +1,64 @@
+name: Refresh top-500 package lists
+
+on:
+  schedule:
+    - cron: '0 6 1 * *'   # First of the month, 06:00 UTC
+  workflow_dispatch:        # Allow manual trigger from the Actions UI
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Refresh top-500 package lists
+        run: node tools/refresh_top_packages.mjs
+
+      - name: Check for changed data files
+        id: check
+        run: |
+          changed=$(git status --porcelain src/sentinel/data/)
+          if [ -n "$changed" ]; then
+            echo "files_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "files_changed=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open pull request if data changed
+        if: steps.check.outputs.files_changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/refresh-top-packages-${{ github.run_number }}
+          commit-message: "chore: refresh bundled top-500 package lists"
+          title: "chore: refresh bundled top-500 package lists"
+          body: |
+            Automated monthly refresh of bundled top-500 lists used by the
+            investigator agent typosquat check.
+
+            Files updated under `src/sentinel/data/`:
+            - `top_packages_npm.json`
+            - `top_packages_pypi.json`
+            - `top_packages_crates.json`
+
+            These lists are consumed by `agents/sentinel-investigator.md`
+            (Mode A, step 3) to compute Levenshtein distance between a
+            candidate package name and the 500 most-downloaded packages in
+            each ecosystem. Keeping the lists current reduces false-negative
+            risk as the ecosystem's popular-package roster evolves.
+
+            **Review checklist:**
+            - [ ] Spot-check a few package names for correctness.
+            - [ ] Verify file sizes are consistent with prior months.
+            - [ ] Merge or close — no code changes accompany this PR.
+          delete-branch: true
