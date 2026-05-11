@@ -408,7 +408,10 @@ await (async () => {
       emit(envelope('SessionStart', { additionalContext: '' }))
       break
     case 'SessionEnd':
-      emit(envelope('SessionEnd', { additionalContext: '' }))
+      emit(
+        envelope('SessionEnd', { additionalContext: '' }),
+        { event: 'warn', decision: 'allow', rule: 'session.end', matched: null },
+      )
       break
     case '--self-test':
       // Handled by the top-level async self-test IIFE above; do nothing here.

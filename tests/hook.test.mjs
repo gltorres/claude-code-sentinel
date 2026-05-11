@@ -553,3 +553,38 @@ test('PostToolUse scrubber disabled via config produces empty additionalContext'
     rmSync(projectDir, { recursive: true, force: true })
   }
 })
+
+// ─── SessionEnd integration test (Sprint 07, Spec 2) ─────────────────────────
+
+test('SessionEnd writes audit line with rule session.end and matching session_id', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'sentinel-session-end-'))
+  const cwd = '/tmp'
+  try {
+    const result = spawnSync(process.execPath, [HOOK, 'SessionEnd'], {
+      input: JSON.stringify({ session_id: 'sess-xyz', cwd }),
+      env: { ...process.env, CLAUDE_PLUGIN_DATA: tmpDir },
+      encoding: 'utf8',
+    })
+
+    // Hook must exit cleanly and emit a valid envelope
+    assert.equal(result.status, 0, `hook exited ${result.status}; stderr: ${result.stderr}`)
+    const out = JSON.parse(result.stdout.trim())
+    assert.equal(out.hookSpecificOutput.hookEventName, 'SessionEnd')
+
+    // Audit JSONL must have exactly one line
+    const auditPath = join(tmpDir, 'audit.jsonl')
+    const lines = readFileSync(auditPath, 'utf8').trim().split('\n').filter(Boolean)
+    assert.equal(lines.length, 1, `expected 1 audit line, got ${lines.length}`)
+
+    // Parse and assert all required fields
+    const rec = JSON.parse(lines[0])
+    assert.equal(rec.hook, 'SessionEnd', 'hook field must be SessionEnd')
+    assert.equal(rec.event, 'warn', 'event field must be warn')
+    assert.equal(rec.rule, 'session.end', 'rule field must be session.end')
+    assert.equal(rec.decision, 'allow', 'decision field must be allow')
+    assert.equal(rec.matched, null, 'matched field must be null')
+    assert.equal(rec.session_id, 'sess-xyz', 'session_id must match the payload')
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true })
+  }
+})
