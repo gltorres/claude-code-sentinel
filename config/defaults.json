@@ -36,8 +36,19 @@
     "allowValueStripping": true,
     "valueStrippingCommands": ["wc","file","stat","ls","du","shasum","sha256sum","md5sum"]
   },
-  "registry": {},
-  "ecosystems": {},
+  "registry": {
+    "cacheTtlHours": 1,
+    "minAgeDays": 14,
+    "minWeeklyDownloads": 100,
+    "requireHomepage": true,
+    "timeoutMs": 250,
+    "cacheMaxEntries": 1024
+  },
+  "ecosystems": {
+    "npm": true,
+    "pypi": true,
+    "crates": true
+  },
   "scrubber": {},
   "audit": {
     "path": null,

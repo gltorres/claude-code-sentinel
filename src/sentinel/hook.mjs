@@ -3,10 +3,13 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 import { loadConfig } from './config.mjs'
 import { writeAuditLine } from './audit.mjs'
 import { matchPath } from './paths.mjs'
 import { evaluateBash } from './bash-policy.mjs'
+import { evaluateRegistry } from './registry-policy.mjs'
+import { resolveCachePath, loadCache, flushCache } from './registry-cache.mjs'
 
 const EVENT_NAMES = ['PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd']
 const MIN_NODE = '20.10.0'
@@ -37,63 +40,211 @@ function emit(obj, decisionCtx = {}) {
   process.exit(0)
 }
 
+export async function runBashBranch({ command, cwd, home, config, fetchFn, now, cache, emit: emitFn, envelope: envelopeFn }) {
+  const truncate = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s ?? ''))
+
+  let bashResult
+  try {
+    bashResult = evaluateBash({ command, cwd, home, config })
+  } catch {
+    bashResult = { decision: 'allow', rule: null, matched: null, matched_segment: null }
+  }
+
+  if (bashResult.decision === 'deny') {
+    const seg = truncate(bashResult.matched_segment, 40)
+    const reason =
+      BANNER_PREFIX +
+      `bash segment '${seg}' reads ${bashResult.matched} (${bashResult.rule})`
+    return emitFn(
+      envelopeFn('PreToolUse', {
+        permissionDecision: 'deny',
+        permissionDecisionReason: reason,
+      }),
+      {
+        event: 'block',
+        decision: 'deny',
+        rule: bashResult.rule,
+        matched: bashResult.matched,
+        matched_segment: bashResult.matched_segment,
+      },
+    )
+  }
+
+  if (bashResult.decision === 'ask') {
+    const reason =
+      BANNER_PREFIX + 'bash shape not statically analysable; confirm before running'
+    return emitFn(
+      envelopeFn('PreToolUse', {
+        permissionDecision: 'ask',
+        permissionDecisionReason: reason,
+      }),
+      {
+        event: 'ask',
+        decision: 'ask',
+        rule: bashResult.rule || 'bash.exotic',
+        matched: null,
+        matched_segment: null,
+      },
+    )
+  }
+
+  // bashResult.decision === 'allow' — proceed to registry check
+  let reg
+  try {
+    reg = await evaluateRegistry({ command, config, fetchFn, cache, now })
+  } catch {
+    reg = { decision: 'allow', rule: 'registry.unavailable', matched: null, matched_segment: null, reason: 'registry check failed; allowing fail-open' }
+  }
+
+  flushCache(resolveCachePath(process.env), cache, (config?.registry?.cacheMaxEntries) ?? 1024)
+
+  if (reg.decision === 'deny') {
+    return emitFn(
+      envelopeFn('PreToolUse', {
+        permissionDecision: 'deny',
+        permissionDecisionReason: BANNER_PREFIX + reg.reason,
+      }),
+      {
+        event: 'block',
+        decision: 'deny',
+        rule: reg.rule,
+        matched: reg.matched,
+        matched_segment: reg.matched_segment,
+      },
+    )
+  }
+
+  if (reg.decision === 'ask') {
+    return emitFn(
+      envelopeFn('PreToolUse', {
+        permissionDecision: 'ask',
+        permissionDecisionReason: BANNER_PREFIX + reg.reason,
+      }),
+      {
+        event: 'ask',
+        decision: 'ask',
+        rule: reg.rule,
+        matched: reg.matched,
+        matched_segment: reg.matched_segment,
+      },
+    )
+  }
+
+  // reg.decision === 'allow'
+  if (reg.rule === 'registry.unavailable') {
+    return emitFn(
+      envelopeFn('PreToolUse', { permissionDecision: 'allow' }),
+      {
+        event: 'warn',
+        decision: 'allow',
+        rule: 'registry.unavailable',
+        matched: null,
+        matched_segment: null,
+      },
+    )
+  }
+
+  // Silent allow — widely-used package, clean registry check
+  return emitFn(
+    envelopeFn('PreToolUse', { permissionDecision: 'allow' }),
+    undefined,
+  )
+}
+
 // --self-test branch: load fixtures, run matchPath in-process, report timing
 if (process.argv.includes('--self-test')) {
-  const fixtureDirs = ['paths', 'bash']
-  const selfTestConfig = loadConfig()
-  let failures = 0
-  let count = 0
-  const t0 = performance.now()
-  for (const dir of fixtureDirs) {
-    const fixturesDir = new URL(`../../tests/fixtures/${dir}`, import.meta.url).pathname
-    const files = readdirSync(fixturesDir).filter(f => f.endsWith('.json'))
-    for (const file of files) {
-      const raw = readFileSync(fixturesDir + '/' + file, 'utf8')
-      const { event: fixtureEvent, expect: fixtureExpect } = JSON.parse(raw)
-      const toolName = fixtureEvent.tool_name
-      let result
-      if (toolName === 'Bash') {
-        result = evaluateBash({
-          command: fixtureEvent.tool_input.command,
-          cwd: fixtureEvent.cwd,
-          home: homedir(),
-          config: selfTestConfig,
-        })
-      } else {
-        let filePath
-        if (toolName === 'Glob') {
-          filePath = fixtureEvent.tool_input.pattern
-        } else if (toolName === 'NotebookEdit') {
-          filePath = fixtureEvent.tool_input.notebook_path ?? fixtureEvent.tool_input.file_path
-        } else {
-          filePath = fixtureEvent.tool_input.file_path
-        }
-        result = matchPath({
-          filePath,
-          cwd: fixtureEvent.cwd,
-          home: homedir(),
-          config: selfTestConfig,
-        })
+  (async () => {
+    // Inline stub lookup: first stubFetch key that is a prefix of url wins.
+    function lookupStub(stubFetch, url) {
+      for (const prefix of Object.keys(stubFetch)) {
+        if (url.startsWith(prefix)) return stubFetch[prefix]
       }
-      const expectKeys = Object.keys(fixtureExpect)
-      const pass = expectKeys.every(k => (result[k] ?? null) === (fixtureExpect[k] ?? null))
-      if (!pass) {
-        process.stderr.write(
-          BANNER_PREFIX + `self-test FAIL [${file}]: ` +
-          `expected ${JSON.stringify(fixtureExpect)} got ${JSON.stringify(result)}\n`
-        )
-        failures++
-      }
-      count++
+      return undefined
     }
-  }
-  const elapsed = (performance.now() - t0).toFixed(1)
-  if (failures > 0) {
-    process.stderr.write(BANNER_PREFIX + `self-test failed (${failures} fixture(s))\n`)
-    process.exit(1)
-  }
-  process.stderr.write(BANNER_PREFIX + `self-test ok (${count} fixtures, ${elapsed} ms total)\n`)
-  process.exit(0)
+
+    const fixtureDirs = ['paths', 'bash', 'registry']
+    const selfTestConfig = loadConfig()
+    let failures = 0
+    let count = 0
+    const t0 = performance.now()
+    for (const bucket of fixtureDirs) {
+      const fixturesDir = new URL(`../../tests/fixtures/${bucket}`, import.meta.url).pathname
+      const files = readdirSync(fixturesDir).filter(f => f.endsWith('.json'))
+      for (const file of files) {
+        const raw = readFileSync(fixturesDir + '/' + file, 'utf8')
+        const fixture = JSON.parse(raw)
+        const { event: fixtureEvent, expect: fixtureExpect } = fixture
+        const toolName = fixtureEvent.tool_name
+        let actual
+        if (bucket === 'paths') {
+          let filePath
+          if (toolName === 'Glob') {
+            filePath = fixtureEvent.tool_input.pattern
+          } else if (toolName === 'NotebookEdit') {
+            filePath = fixtureEvent.tool_input.notebook_path ?? fixtureEvent.tool_input.file_path
+          } else {
+            filePath = fixtureEvent.tool_input.file_path
+          }
+          actual = matchPath({
+            filePath,
+            cwd: fixtureEvent.cwd,
+            home: homedir(),
+            config: selfTestConfig,
+          })
+        } else if (bucket === 'bash') {
+          actual = evaluateBash({
+            command: fixtureEvent.tool_input.command,
+            cwd: fixtureEvent.cwd,
+            home: homedir(),
+            config: selfTestConfig,
+          })
+        } else if (bucket === 'registry') {
+          // Build a fixture-driven fetchFn from fixture.stubFetch:
+          //   stubFetch: { '<urlPrefix>': { status: 200|404|500, body?: <json>, throw?: 'abort'|'network' } }
+          const fetchFn = async (url) => {
+            const entry = lookupStub(fixture.stubFetch, url)
+            if (!entry) return { ok: false, status: 500, async json() { return {} } }
+            if (entry.throw === 'network') throw new Error('network')
+            if (entry.throw === 'abort') {
+              const e = new Error('abort')
+              e.name = 'AbortError'
+              throw e
+            }
+            return {
+              ok: entry.status >= 200 && entry.status < 300,
+              status: entry.status,
+              async json() { return entry.body ?? {} },
+            }
+          }
+          const cache = {}
+          actual = await evaluateRegistry({
+            command: fixtureEvent.tool_input.command,
+            config: fixtureEvent.config ?? selfTestConfig,
+            fetchFn,
+            cache,
+            now: fixture.now ?? Date.now(),
+          })
+        }
+        const expectKeys = Object.keys(fixtureExpect)
+        const pass = expectKeys.every(k => (actual[k] ?? null) === (fixtureExpect[k] ?? null))
+        if (!pass) {
+          process.stderr.write(
+            BANNER_PREFIX + `self-test FAIL [${file}]: ` +
+            `expected ${JSON.stringify(fixtureExpect)} got ${JSON.stringify(actual)}\n`
+          )
+          failures++
+        }
+        count++
+      }
+    }
+    const elapsed = (performance.now() - t0).toFixed(1)
+    if (failures > 0) {
+      process.stderr.write(BANNER_PREFIX + `self-test failed (${failures} fixture(s))\n`)
+      process.exit(1)
+    }
+    process.stderr.write(BANNER_PREFIX + `self-test ok (${count} fixtures, ${elapsed} ms total)\n`)
+    process.exit(0)
+  })()
 }
 
 // Node version preflight — fail-open with advisory if < MIN_NODE
@@ -122,122 +273,113 @@ const config = loadConfig({ cwd: event.cwd })
 
 const which = process.argv[2]
 
-switch (which) {
-  case 'PreToolUse': {
-    const tool = event.tool_name ?? ''
-    const cwd = event.cwd ?? process.cwd()
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+await (async () => {
+  switch (which) {
+    case 'PreToolUse': {
+      const tool = event.tool_name ?? ''
+      const cwd = event.cwd ?? process.cwd()
 
-    // Extract the path under test for the five protected tool types.
-    let filePath = null
-    if (tool === 'Read' || tool === 'Edit' || tool === 'Grep') {
-      filePath = event.tool_input?.file_path ?? event.tool_input?.path ?? null
-    } else if (tool === 'NotebookEdit') {
-      filePath = event.tool_input?.notebook_path ?? event.tool_input?.file_path ?? null
-    } else if (tool === 'Glob') {
-      // For Glob, the pattern itself is the path under test; resolve it against cwd.
-      filePath = event.tool_input?.pattern ?? null
-    }
+      // Extract the path under test for the five protected tool types.
+      let filePath = null
+      if (tool === 'Read' || tool === 'Edit' || tool === 'Grep') {
+        filePath = event.tool_input?.file_path ?? event.tool_input?.path ?? null
+      } else if (tool === 'NotebookEdit') {
+        filePath = event.tool_input?.notebook_path ?? event.tool_input?.file_path ?? null
+      } else if (tool === 'Glob') {
+        // For Glob, the pattern itself is the path under test; resolve it against cwd.
+        filePath = event.tool_input?.pattern ?? null
+      }
 
-    if (filePath !== null &&
-        (tool === 'Read' || tool === 'Edit' || tool === 'Grep' ||
-         tool === 'Glob' || tool === 'NotebookEdit')) {
-      const result = matchPath({ filePath, cwd, home: homedir(), config })
-      if (result.decision === 'deny') {
-        const reason =
-          BANNER_PREFIX + `read of ${result.matched} blocked by ${result.rule}`
-        const decisionCtx = {
-          event: 'block',
-          decision: 'deny',
-          rule: result.rule,
-          matched: result.matched,
-        }
-        emit(
-          envelope('PreToolUse', {
-            permissionDecision: 'deny',
-            permissionDecisionReason: reason,
-          }),
-          decisionCtx,
-        )
-      } else {
-        emit(envelope('PreToolUse', {
-          permissionDecision: 'allow',
-          permissionDecisionReason: BANNER_PREFIX + 'path allowed',
-        }))
-      }
-    } else if (tool === 'Bash') {
-      // Local helper: cap reason strings to avoid oversized stdout lines
-      const truncate = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s ?? ''))
-      const command = (event.tool_input && event.tool_input.command) || ''
-      let bashResult
-      try {
-        bashResult = evaluateBash({ command, cwd, home: homedir(), config })
-      } catch {
-        bashResult = { decision: 'allow', rule: null, matched: null, matched_segment: null }
-      }
-      if (bashResult.decision === 'deny') {
-        const seg = truncate(bashResult.matched_segment, 40)
-        const reason =
-          BANNER_PREFIX +
-          `bash segment '${seg}' reads ${bashResult.matched} (${bashResult.rule})`
-        emit(
-          envelope('PreToolUse', {
-            permissionDecision: 'deny',
-            permissionDecisionReason: reason,
-          }),
-          {
+      if (filePath !== null &&
+          (tool === 'Read' || tool === 'Edit' || tool === 'Grep' ||
+           tool === 'Glob' || tool === 'NotebookEdit')) {
+        const result = matchPath({ filePath, cwd, home: homedir(), config })
+        if (result.decision === 'deny') {
+          const reason =
+            BANNER_PREFIX + `read of ${result.matched} blocked by ${result.rule}`
+          const decisionCtx = {
             event: 'block',
             decision: 'deny',
-            rule: bashResult.rule,
-            matched: bashResult.matched,
-            matched_segment: bashResult.matched_segment,
-          },
-        )
-      } else if (bashResult.decision === 'ask') {
-        const reason =
-          BANNER_PREFIX + 'bash shape not statically analysable; confirm before running'
-        emit(
-          envelope('PreToolUse', {
-            permissionDecision: 'ask',
-            permissionDecisionReason: reason,
-          }),
-          {
-            event: 'ask',
-            decision: 'ask',
-            rule: bashResult.rule || 'bash.exotic',
-            matched: null,
-            matched_segment: null,
-          },
-        )
-      } else {
-        emit(
-          envelope('PreToolUse', {
+            rule: result.rule,
+            matched: result.matched,
+          }
+          emit(
+            envelope('PreToolUse', {
+              permissionDecision: 'deny',
+              permissionDecisionReason: reason,
+            }),
+            decisionCtx,
+          )
+        } else {
+          emit(envelope('PreToolUse', {
             permissionDecision: 'allow',
-            permissionDecisionReason: BANNER_PREFIX + 'bash allowed',
-          }),
-          { event: 'warn', decision: 'allow', rule: null, matched: null, matched_segment: null },
-        )
+            permissionDecisionReason: BANNER_PREFIX + 'path allowed',
+          }))
+        }
+      } else if (tool === 'Bash') {
+        const command = (event.tool_input && event.tool_input.command) || ''
+        const cachePath = resolveCachePath(process.env)
+        const cache = loadCache(cachePath)
+        // Wire SENTINEL_TEST_FETCH_FIXTURES for hermetic E2E tests: load the fixture map
+        // and replace globalThis.fetch with a stub that matches by URL prefix.
+        let fetchFn = globalThis.fetch
+        const fixtureFile = process.env.SENTINEL_TEST_FETCH_FIXTURES
+        if (fixtureFile) {
+          let stubMap
+          try { stubMap = JSON.parse(readFileSync(fixtureFile, 'utf8')) } catch { stubMap = {} }
+          fetchFn = async (url) => {
+            let entry
+            for (const prefix of Object.keys(stubMap)) {
+              if (url.startsWith(prefix)) { entry = stubMap[prefix]; break }
+            }
+            if (!entry) return { ok: false, status: 500, async json() { return {} } }
+            if (entry.throw) throw new Error('stub network error')
+            return {
+              ok: entry.status >= 200 && entry.status < 300,
+              status: entry.status,
+              async json() { return entry.body ?? {} },
+            }
+          }
+        }
+        await runBashBranch({
+          command,
+          cwd,
+          home: homedir(),
+          config,
+          fetchFn,
+          now: Date.now(),
+          cache,
+          emit,
+          envelope,
+        })
+        return // async IIFE calls emit() which calls process.exit(0); this return is belt-and-suspenders
+      } else {
+        // Unrecognised tool names: scaffold-allow (unchanged from Sprint 02)
+        emit(envelope('PreToolUse', {
+          permissionDecision: 'allow',
+          permissionDecisionReason: BANNER_PREFIX + 'scaffold no-op',
+        }))
       }
-    } else {
-      // Unrecognised tool names: scaffold-allow (unchanged from Sprint 02)
+      break
+    }
+    case 'PostToolUse':
+      emit(envelope('PostToolUse', { additionalContext: '' }))
+      break
+    case 'SessionStart':
+      emit(envelope('SessionStart', { additionalContext: '' }))
+      break
+    case 'SessionEnd':
+      emit(envelope('SessionEnd', { additionalContext: '' }))
+      break
+    case '--self-test':
+      // Handled by the top-level async self-test IIFE above; do nothing here.
+      break
+    default:
       emit(envelope('PreToolUse', {
         permissionDecision: 'allow',
-        permissionDecisionReason: BANNER_PREFIX + 'scaffold no-op',
+        permissionDecisionReason: BANNER_PREFIX + `unknown event ${which || '<none>'}; allowing fail-open`,
       }))
-    }
-    break
   }
-  case 'PostToolUse':
-    emit(envelope('PostToolUse', { additionalContext: '' }))
-    break
-  case 'SessionStart':
-    emit(envelope('SessionStart', { additionalContext: '' }))
-    break
-  case 'SessionEnd':
-    emit(envelope('SessionEnd', { additionalContext: '' }))
-    break
-  default:
-    emit(envelope('PreToolUse', {
-      permissionDecision: 'allow',
-      permissionDecisionReason: BANNER_PREFIX + `unknown event ${which || '<none>'}; allowing fail-open`,
-    }))
+})()
 }

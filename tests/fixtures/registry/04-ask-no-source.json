@@ -1,0 +1,20 @@
+{
+  "event": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": { "command": "npm install no-source-pkg" }
+  },
+  "now": 1746835200000,
+  "stubFetch": {
+    "https://registry.npmjs.org/no-source-pkg": {
+      "status": 200,
+      "body": {
+        "time": { "created": "2025-01-01T00:00:00.000Z" },
+        "downloads": { "weekly": 50000 },
+        "homepage": null,
+        "repository": null
+      }
+    }
+  },
+  "expect": { "decision": "ask", "rule": "registry.no_source", "matched": "no-source-pkg" }
+}

@@ -1,0 +1,21 @@
+{
+  "event": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": { "command": "npm install lodash && pip install fake-pkg-9999" }
+  },
+  "now": 1746835200000,
+  "stubFetch": {
+    "https://registry.npmjs.org/lodash": {
+      "status": 200,
+      "body": {
+        "time": { "created": "2012-04-23T00:00:00.000Z" },
+        "downloads": { "weekly": 1000000 },
+        "homepage": "https://lodash.com",
+        "repository": { "url": "https://github.com/lodash/lodash" }
+      }
+    },
+    "https://pypi.org/pypi/fake-pkg-9999": { "status": 404 }
+  },
+  "expect": { "decision": "deny", "rule": "registry.not_found", "matched": "fake-pkg-9999" }
+}
