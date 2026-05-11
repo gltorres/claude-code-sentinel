@@ -1,0 +1,22 @@
+{
+  "event": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": { "command": "cargo add serde" }
+  },
+  "now": 1746835200000,
+  "stubFetch": {
+    "https://crates.io/api/v1/crates/serde": {
+      "status": 200,
+      "body": {
+        "crate": {
+          "created_at": "2015-01-01T00:00:00.000Z",
+          "homepage": "https://serde.rs",
+          "repository": "https://github.com/serde-rs/serde",
+          "recent_downloads": 5000000
+        }
+      }
+    }
+  },
+  "expect": { "decision": "allow", "rule": null }
+}

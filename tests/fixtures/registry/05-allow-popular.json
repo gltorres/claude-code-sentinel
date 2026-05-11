@@ -1,0 +1,20 @@
+{
+  "event": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": { "command": "npm install lodash" }
+  },
+  "now": 1746835200000,
+  "stubFetch": {
+    "https://registry.npmjs.org/lodash": {
+      "status": 200,
+      "body": {
+        "time": { "created": "2012-04-23T00:00:00.000Z" },
+        "downloads": { "weekly": 1000000 },
+        "homepage": "https://lodash.com",
+        "repository": { "url": "https://github.com/lodash/lodash" }
+      }
+    }
+  },
+  "expect": { "decision": "allow", "rule": null }
+}

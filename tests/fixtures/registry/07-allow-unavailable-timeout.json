@@ -1,0 +1,12 @@
+{
+  "event": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": { "command": "npm install another-package" }
+  },
+  "now": 1746835200000,
+  "stubFetch": {
+    "https://registry.npmjs.org/another-package": { "throw": "abort" }
+  },
+  "expect": { "decision": "allow", "rule": "registry.unavailable" }
+}

@@ -1,0 +1,20 @@
+{
+  "event": {
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Bash",
+    "tool_input": { "command": "npm install brand-new-pkg" }
+  },
+  "now": 1746835200000,
+  "stubFetch": {
+    "https://registry.npmjs.org/brand-new-pkg": {
+      "status": 200,
+      "body": {
+        "time": { "created": "2026-05-05T00:00:00.000Z" },
+        "downloads": { "weekly": 5000 },
+        "homepage": "https://example.com/brand-new-pkg",
+        "repository": { "url": "https://github.com/example/brand-new-pkg" }
+      }
+    }
+  },
+  "expect": { "decision": "ask", "rule": "registry.too_new", "matched": "brand-new-pkg" }
+}

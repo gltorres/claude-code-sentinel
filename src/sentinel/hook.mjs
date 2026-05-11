@@ -152,61 +152,98 @@ export async function runBashBranch({ command, cwd, home, config, fetchFn, now, 
 
 // --self-test branch: load fixtures, run matchPath in-process, report timing
 if (process.argv.includes('--self-test')) {
-  const fixtureDirs = ['paths', 'bash']
-  const selfTestConfig = loadConfig()
-  let failures = 0
-  let count = 0
-  const t0 = performance.now()
-  for (const dir of fixtureDirs) {
-    const fixturesDir = new URL(`../../tests/fixtures/${dir}`, import.meta.url).pathname
-    const files = readdirSync(fixturesDir).filter(f => f.endsWith('.json'))
-    for (const file of files) {
-      const raw = readFileSync(fixturesDir + '/' + file, 'utf8')
-      const { event: fixtureEvent, expect: fixtureExpect } = JSON.parse(raw)
-      const toolName = fixtureEvent.tool_name
-      let result
-      if (toolName === 'Bash') {
-        result = evaluateBash({
-          command: fixtureEvent.tool_input.command,
-          cwd: fixtureEvent.cwd,
-          home: homedir(),
-          config: selfTestConfig,
-        })
-      } else {
-        let filePath
-        if (toolName === 'Glob') {
-          filePath = fixtureEvent.tool_input.pattern
-        } else if (toolName === 'NotebookEdit') {
-          filePath = fixtureEvent.tool_input.notebook_path ?? fixtureEvent.tool_input.file_path
-        } else {
-          filePath = fixtureEvent.tool_input.file_path
-        }
-        result = matchPath({
-          filePath,
-          cwd: fixtureEvent.cwd,
-          home: homedir(),
-          config: selfTestConfig,
-        })
+  (async () => {
+    // Inline stub lookup: first stubFetch key that is a prefix of url wins.
+    function lookupStub(stubFetch, url) {
+      for (const prefix of Object.keys(stubFetch)) {
+        if (url.startsWith(prefix)) return stubFetch[prefix]
       }
-      const expectKeys = Object.keys(fixtureExpect)
-      const pass = expectKeys.every(k => (result[k] ?? null) === (fixtureExpect[k] ?? null))
-      if (!pass) {
-        process.stderr.write(
-          BANNER_PREFIX + `self-test FAIL [${file}]: ` +
-          `expected ${JSON.stringify(fixtureExpect)} got ${JSON.stringify(result)}\n`
-        )
-        failures++
-      }
-      count++
+      return undefined
     }
-  }
-  const elapsed = (performance.now() - t0).toFixed(1)
-  if (failures > 0) {
-    process.stderr.write(BANNER_PREFIX + `self-test failed (${failures} fixture(s))\n`)
-    process.exit(1)
-  }
-  process.stderr.write(BANNER_PREFIX + `self-test ok (${count} fixtures, ${elapsed} ms total)\n`)
-  process.exit(0)
+
+    const fixtureDirs = ['paths', 'bash', 'registry']
+    const selfTestConfig = loadConfig()
+    let failures = 0
+    let count = 0
+    const t0 = performance.now()
+    for (const bucket of fixtureDirs) {
+      const fixturesDir = new URL(`../../tests/fixtures/${bucket}`, import.meta.url).pathname
+      const files = readdirSync(fixturesDir).filter(f => f.endsWith('.json'))
+      for (const file of files) {
+        const raw = readFileSync(fixturesDir + '/' + file, 'utf8')
+        const fixture = JSON.parse(raw)
+        const { event: fixtureEvent, expect: fixtureExpect } = fixture
+        const toolName = fixtureEvent.tool_name
+        let actual
+        if (bucket === 'paths') {
+          let filePath
+          if (toolName === 'Glob') {
+            filePath = fixtureEvent.tool_input.pattern
+          } else if (toolName === 'NotebookEdit') {
+            filePath = fixtureEvent.tool_input.notebook_path ?? fixtureEvent.tool_input.file_path
+          } else {
+            filePath = fixtureEvent.tool_input.file_path
+          }
+          actual = matchPath({
+            filePath,
+            cwd: fixtureEvent.cwd,
+            home: homedir(),
+            config: selfTestConfig,
+          })
+        } else if (bucket === 'bash') {
+          actual = evaluateBash({
+            command: fixtureEvent.tool_input.command,
+            cwd: fixtureEvent.cwd,
+            home: homedir(),
+            config: selfTestConfig,
+          })
+        } else if (bucket === 'registry') {
+          // Build a fixture-driven fetchFn from fixture.stubFetch:
+          //   stubFetch: { '<urlPrefix>': { status: 200|404|500, body?: <json>, throw?: 'abort'|'network' } }
+          const fetchFn = async (url) => {
+            const entry = lookupStub(fixture.stubFetch, url)
+            if (!entry) return { ok: false, status: 500, async json() { return {} } }
+            if (entry.throw === 'network') throw new Error('network')
+            if (entry.throw === 'abort') {
+              const e = new Error('abort')
+              e.name = 'AbortError'
+              throw e
+            }
+            return {
+              ok: entry.status >= 200 && entry.status < 300,
+              status: entry.status,
+              async json() { return entry.body ?? {} },
+            }
+          }
+          const cache = {}
+          actual = await evaluateRegistry({
+            command: fixtureEvent.tool_input.command,
+            config: fixtureEvent.config ?? selfTestConfig,
+            fetchFn,
+            cache,
+            now: fixture.now ?? Date.now(),
+          })
+        }
+        const expectKeys = Object.keys(fixtureExpect)
+        const pass = expectKeys.every(k => (actual[k] ?? null) === (fixtureExpect[k] ?? null))
+        if (!pass) {
+          process.stderr.write(
+            BANNER_PREFIX + `self-test FAIL [${file}]: ` +
+            `expected ${JSON.stringify(fixtureExpect)} got ${JSON.stringify(actual)}\n`
+          )
+          failures++
+        }
+        count++
+      }
+    }
+    const elapsed = (performance.now() - t0).toFixed(1)
+    if (failures > 0) {
+      process.stderr.write(BANNER_PREFIX + `self-test failed (${failures} fixture(s))\n`)
+      process.exit(1)
+    }
+    process.stderr.write(BANNER_PREFIX + `self-test ok (${count} fixtures, ${elapsed} ms total)\n`)
+    process.exit(0)
+  })()
 }
 
 // Node version preflight — fail-open with advisory if < MIN_NODE
