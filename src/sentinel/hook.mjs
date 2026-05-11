@@ -291,6 +291,16 @@ if (process.argv.includes('--self-test')) {
   })()
 }
 
+const DRY_RUN = process.argv.includes('--dry-run')
+
+function dryEmit({ decision, rule, matched, reason }) {
+  const r = (rule    ?? 'null')
+  const m = (matched ?? 'null')
+  const rs = (reason  ?? '')
+  process.stdout.write(`decision=${decision} rule=${r} matched=${m} reason="${rs}"\n`)
+  process.exit(0)
+}
+
 // Node version preflight — fail-open with advisory if < MIN_NODE
 const nodeVer = (process.versions.node || '0.0.0').split('-')[0]
 if (compareSemver(nodeVer, MIN_NODE) < 0) {
@@ -319,6 +329,11 @@ const which = process.argv[2]
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
 await (async () => {
+  // --dry-run is only supported for PreToolUse. Exit 1 for any other event name.
+  if (DRY_RUN && which !== 'PreToolUse') {
+    process.stderr.write('dry-run only supports PreToolUse today\n')
+    process.exit(1)
+  }
   switch (which) {
     case 'PreToolUse': {
       const tool = event.tool_name ?? ''
@@ -348,18 +363,26 @@ await (async () => {
             rule: result.rule,
             matched: result.matched,
           }
-          emit(
-            envelope('PreToolUse', {
-              permissionDecision: 'deny',
-              permissionDecisionReason: reason,
-            }),
-            decisionCtx,
-          )
+          if (DRY_RUN) {
+            dryEmit({ decision: 'deny', rule: result.rule, matched: result.matched, reason })
+          } else {
+            emit(
+              envelope('PreToolUse', {
+                permissionDecision: 'deny',
+                permissionDecisionReason: reason,
+              }),
+              decisionCtx,
+            )
+          }
         } else {
-          emit(envelope('PreToolUse', {
-            permissionDecision: 'allow',
-            permissionDecisionReason: BANNER_PREFIX + 'path allowed',
-          }))
+          if (DRY_RUN) {
+            dryEmit({ decision: 'allow', rule: null, matched: null, reason: BANNER_PREFIX + 'path allowed' })
+          } else {
+            emit(envelope('PreToolUse', {
+              permissionDecision: 'allow',
+              permissionDecisionReason: BANNER_PREFIX + 'path allowed',
+            }))
+          }
         }
       } else if (tool === 'Bash') {
         const command = (event.tool_input && event.tool_input.command) || ''
@@ -386,6 +409,15 @@ await (async () => {
             }
           }
         }
+        const bashEmitFn = DRY_RUN
+          ? (env, decisionCtx = {}) => {
+              const d = env?.hookSpecificOutput?.permissionDecision ?? 'allow'
+              const rule = decisionCtx?.rule ?? null
+              const matched = decisionCtx?.matched ?? null
+              const reason = env?.hookSpecificOutput?.permissionDecisionReason ?? ''
+              dryEmit({ decision: d, rule, matched, reason })
+            }
+          : emit
         await runBashBranch({
           command,
           cwd,
@@ -394,16 +426,20 @@ await (async () => {
           fetchFn,
           now: Date.now(),
           cache,
-          emit,
+          emit: bashEmitFn,
           envelope,
         })
         return // async IIFE calls emit() which calls process.exit(0); this return is belt-and-suspenders
       } else {
         // Unrecognised tool names: scaffold-allow (unchanged from Sprint 02)
-        emit(envelope('PreToolUse', {
-          permissionDecision: 'allow',
-          permissionDecisionReason: BANNER_PREFIX + 'scaffold no-op',
-        }))
+        if (DRY_RUN) {
+          dryEmit({ decision: 'allow', rule: null, matched: null, reason: BANNER_PREFIX + 'scaffold no-op' })
+        } else {
+          emit(envelope('PreToolUse', {
+            permissionDecision: 'allow',
+            permissionDecisionReason: BANNER_PREFIX + 'scaffold no-op',
+          }))
+        }
       }
       break
     }
@@ -452,6 +488,11 @@ await (async () => {
       break
     case '--self-test':
       // Handled by the top-level async self-test IIFE above; do nothing here.
+      break
+    case '--dry-run':
+      // If argv[2] is literally '--dry-run' (no event name provided), inform the user.
+      process.stderr.write('dry-run only supports PreToolUse today\n')
+      process.exit(1)
       break
     default:
       emit(envelope('PreToolUse', {
