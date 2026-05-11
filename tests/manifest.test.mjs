@@ -8,7 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO = resolve(__dirname, '..')
 
 const manifest = JSON.parse(readFileSync(resolve(REPO, '.claude-plugin/plugin.json'), 'utf8'))
-const hooks = JSON.parse(readFileSync(resolve(REPO, 'hooks/sentinel.json'), 'utf8'))
+const hooks = JSON.parse(readFileSync(resolve(REPO, 'hooks/hooks.json'), 'utf8'))
 
 test('plugin.json has required minimal fields', () => {
   assert.equal(manifest.name, 'sentinel')
@@ -22,7 +22,7 @@ test('plugin.json has no forbidden fields (no version, no hooks block here)', ()
   assert.equal(manifest.commands, undefined)
 })
 
-test('hooks/sentinel.json registers all four event names', () => {
+test('hooks/hooks.json registers all four event names', () => {
   const events = Object.keys(hooks.hooks)
   for (const ev of ['PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd']) {
     assert.ok(events.includes(ev), `missing event: ${ev}`)
