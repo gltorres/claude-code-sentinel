@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Sentinel — single ESM hook entry. Static imports only.
-import { readFileSync, readdirSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { loadConfig } from './config.mjs'
@@ -11,6 +11,7 @@ import { evaluateBash } from './bash-policy.mjs'
 import { evaluateRegistry } from './registry-policy.mjs'
 import { resolveCachePath, loadCache, flushCache } from './registry-cache.mjs'
 import { scrubResponse } from './scrubber-policy.mjs'
+import { summariseAuditWindow, composeBanner } from './session.mjs'
 
 const EVENT_NAMES = ['PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd']
 const MIN_NODE = '20.10.0'
@@ -163,7 +164,7 @@ if (process.argv.includes('--self-test')) {
       return undefined
     }
 
-    const fixtureDirs = ['paths', 'bash', 'registry', 'scrubber']
+    const fixtureDirs = ['paths', 'bash', 'registry', 'scrubber', 'session']
     const selfTestConfig = loadConfig()
     let failures = 0
     let count = 0
@@ -239,9 +240,37 @@ if (process.argv.includes('--self-test')) {
             rule: firstFamily != null ? 'scrubber.' + firstFamily : null,
             matched: result.matched,
           }
+        } else if (bucket === 'session') {
+          // Materialise fixture.audit_lines into a temp audit.jsonl file.
+          const tmpDir = mkdtempSync(tmpdir() + '/sentinel-selftest-')
+          let banner = ''
+          try {
+            const auditPath = tmpDir + '/audit.jsonl'
+            const lines = fixture.audit_lines ?? []
+            writeFileSync(auditPath, lines.map(l => JSON.stringify(l)).join('\n') + (lines.length > 0 ? '\n' : ''), 'utf8')
+            // Build a minimal config that overrides the audit path.
+            const fixtureConfig = {
+              ...(fixture.config ?? selfTestConfig),
+              audit: {
+                ...((fixture.config ?? selfTestConfig).audit ?? {}),
+                path: auditPath,
+              },
+            }
+            const summary = summariseAuditWindow({ config: fixtureConfig, now: fixture.now ?? Date.now() })
+            banner = composeBanner(summary)
+          } finally {
+            rmSync(tmpDir, { recursive: true, force: true })
+          }
+          actual = { banner }
         }
         const expectKeys = Object.keys(fixtureExpect)
-        const pass = expectKeys.every(k => (actual[k] ?? null) === (fixtureExpect[k] ?? null))
+        const pass = expectKeys.every(k => {
+          if (k === 'banner_includes') {
+            // Substring match: actual.banner must contain the expected string.
+            return typeof actual.banner === 'string' && actual.banner.includes(fixtureExpect[k])
+          }
+          return (actual[k] ?? null) === (fixtureExpect[k] ?? null)
+        })
         if (!pass) {
           process.stderr.write(
             BANNER_PREFIX + `self-test FAIL [${file}]: ` +
@@ -404,11 +433,22 @@ await (async () => {
         process.exit(0)
       }
     }
-    case 'SessionStart':
-      emit(envelope('SessionStart', { additionalContext: '' }))
+    case 'SessionStart': {
+      let banner
+      try {
+        const summary = summariseAuditWindow({ config, now: Date.now() })
+        banner = composeBanner(summary)
+      } catch {
+        banner = 'Sentinel active — no events yet. PostToolUse scrubbing is next-turn-only; PreToolUse is the primary defence.'
+      }
+      emit(envelope('SessionStart', { additionalContext: banner }))
       break
+    }
     case 'SessionEnd':
-      emit(envelope('SessionEnd', { additionalContext: '' }))
+      emit(
+        envelope('SessionEnd', { additionalContext: '' }),
+        { event: 'warn', decision: 'allow', rule: 'session.end', matched: null },
+      )
       break
     case '--self-test':
       // Handled by the top-level async self-test IIFE above; do nothing here.

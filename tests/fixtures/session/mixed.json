@@ -1,0 +1,53 @@
+{
+  "event": {
+    "hook_event_name": "SessionStart",
+    "session_id": "selftest-mixed",
+    "cwd": "/tmp"
+  },
+  "now": 1700000000000,
+  "audit_lines": [
+    {
+      "id": "01HGK0000000000000000003",
+      "ts": "2023-11-05T11:33:20.000Z",
+      "session_id": "selftest-mixed",
+      "cwd": "/tmp",
+      "event": "block",
+      "hook": "PreToolUse",
+      "tool": "Bash",
+      "rule": "paths.deny",
+      "matched": "/etc/shadow",
+      "input_summary": "cat /etc/shadow",
+      "decision": "deny",
+      "metadata": null
+    },
+    {
+      "id": "01HGK0000000000000000002",
+      "ts": "2023-11-12T11:33:20.000Z",
+      "session_id": "selftest-mixed",
+      "cwd": "/tmp",
+      "event": "scrub",
+      "hook": "PostToolUse",
+      "tool": "Bash",
+      "rule": "scrubber.github_pat",
+      "matched": null,
+      "input_summary": "",
+      "decision": "allow",
+      "metadata": null
+    },
+    {
+      "id": "01HGK0000000000000000001",
+      "ts": "2023-11-14T11:33:20.000Z",
+      "session_id": "selftest-mixed",
+      "cwd": "/tmp",
+      "event": "block",
+      "hook": "PreToolUse",
+      "tool": "Bash",
+      "rule": "paths.deny",
+      "matched": "/etc/passwd",
+      "input_summary": "cat /etc/passwd",
+      "decision": "deny",
+      "metadata": null
+    }
+  ],
+  "expect": { "banner_includes": "1 block" }
+}

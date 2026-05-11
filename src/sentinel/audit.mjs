@@ -8,7 +8,7 @@ import { ulid } from './ulid.mjs'
 
 // Resolve the absolute audit file path from config, env, or fallback.
 // Priority: config.audit.path > CLAUDE_PLUGIN_DATA env var > ~/.claude/sentinel/audit.jsonl
-function resolveAuditPath(config) {
+export function resolveAuditPath(config) {
   const configured = config?.audit?.path
   if (configured) {
     // Expand leading ~ to the OS home directory

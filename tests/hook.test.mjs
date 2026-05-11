@@ -296,7 +296,7 @@ test('--self-test: per-fixture in-process latency < 20 ms', () => {
   const fixtureCount = Number(match[1])
   const totalMs = Number(match[2])
   assert.ok(fixtureCount > 0, 'expected at least one fixture')
-  assert.ok(fixtureCount >= 41, `expected >= 41 fixtures (paths + bash + registry + scrubber), got ${fixtureCount}`)
+  assert.ok(fixtureCount >= 43, `expected >= 43 fixtures (paths + bash + registry + scrubber + session), got ${fixtureCount}`)
   const perFixtureMs = totalMs / fixtureCount
   assert.ok(
     perFixtureMs < 20,
@@ -311,8 +311,8 @@ test('--self-test: scrubber bucket present and exits 0', () => {
   assert.ok(match, `unexpected stderr format: ${r.stderr}`)
   const fixtureCount = Number(match[1])
   assert.ok(
-    fixtureCount >= 41,
-    `expected >= 41 fixtures (paths + bash + registry + scrubber), got ${fixtureCount}`
+    fixtureCount >= 43,
+    `expected >= 43 fixtures (paths + bash + registry + scrubber + session), got ${fixtureCount}`
   )
 })
 
@@ -551,5 +551,169 @@ test('PostToolUse scrubber disabled via config produces empty additionalContext'
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
     rmSync(projectDir, { recursive: true, force: true })
+  }
+})
+
+// ─── SessionEnd integration test (Sprint 07, Spec 2) ─────────────────────────
+
+test('SessionEnd writes audit line with rule session.end and matching session_id', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'sentinel-session-end-'))
+  const cwd = '/tmp'
+  try {
+    const result = spawnSync(process.execPath, [HOOK, 'SessionEnd'], {
+      input: JSON.stringify({ session_id: 'sess-xyz', cwd }),
+      env: { ...process.env, CLAUDE_PLUGIN_DATA: tmpDir },
+      encoding: 'utf8',
+    })
+
+    // Hook must exit cleanly and emit a valid envelope
+    assert.equal(result.status, 0, `hook exited ${result.status}; stderr: ${result.stderr}`)
+    const out = JSON.parse(result.stdout.trim())
+    assert.equal(out.hookSpecificOutput.hookEventName, 'SessionEnd')
+
+    // Audit JSONL must have exactly one line
+    const auditPath = join(tmpDir, 'audit.jsonl')
+    const lines = readFileSync(auditPath, 'utf8').trim().split('\n').filter(Boolean)
+    assert.equal(lines.length, 1, `expected 1 audit line, got ${lines.length}`)
+
+    // Parse and assert all required fields
+    const rec = JSON.parse(lines[0])
+    assert.equal(rec.hook, 'SessionEnd', 'hook field must be SessionEnd')
+    assert.equal(rec.event, 'warn', 'event field must be warn')
+    assert.equal(rec.rule, 'session.end', 'rule field must be session.end')
+    assert.equal(rec.decision, 'allow', 'decision field must be allow')
+    assert.equal(rec.matched, null, 'matched field must be null')
+    assert.equal(rec.session_id, 'sess-xyz', 'session_id must match the payload')
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true })
+  }
+})
+
+// ─── SessionStart integration tests (Sprint 07, Spec 3) ───────────────────────
+
+test('SessionStart with empty audit log returns no-events-yet banner', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-ss-'))
+  try {
+    const input = JSON.stringify({ session_id: 'ss-test-1', cwd: '/tmp' })
+    const r = runHookEnv(['SessionStart'], input, { CLAUDE_PLUGIN_DATA: dataDir })
+    assert.equal(r.status, 0, `hook exited ${r.status}; stderr: ${r.stderr}`)
+
+    const out = JSON.parse(r.stdout.trim())
+    assert.equal(out.hookSpecificOutput.hookEventName, 'SessionStart')
+
+    const ctx = out.hookSpecificOutput.additionalContext
+    assert.ok(
+      /Sentinel active — no events yet/.test(ctx),
+      `expected "no events yet" banner, got: ${ctx}`,
+    )
+    assert.ok(
+      ctx.includes('next-turn-only'),
+      `banner must include next-turn-only caveat, got: ${ctx}`,
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('SessionStart with 2 blocks + 1 scrub in last 7d shows correct counts', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-ss-'))
+  try {
+    // Seed audit.jsonl with 2 block lines and 1 scrub line all within the last 7 days
+    const now = Date.now()
+    const ts1 = new Date(now - 1 * 24 * 60 * 60 * 1000).toISOString() // 1 day ago
+    const ts2 = new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString() // 3 days ago
+    const ts3 = new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString() // 5 days ago
+
+    const makeRecord = (ts, eventType) => JSON.stringify({
+      id: 'AAAAAAAAAAAAAAAAAAAAAAAAAA',
+      ts,
+      session_id: 'seed-sess',
+      cwd: '/tmp',
+      event: eventType,
+      hook: 'PreToolUse',
+      tool: 'Bash',
+      rule: 'test.rule',
+      matched: null,
+      input_summary: {},
+      decision: 'deny',
+      metadata: {},
+    })
+
+    const auditLines = [
+      makeRecord(ts1, 'block'),
+      makeRecord(ts2, 'block'),
+      makeRecord(ts3, 'scrub'),
+    ].join('\n') + '\n'
+
+    writeFileSync(join(dataDir, 'audit.jsonl'), auditLines, 'utf8')
+
+    const input = JSON.stringify({ session_id: 'ss-test-2', cwd: '/tmp' })
+    const r = runHookEnv(['SessionStart'], input, { CLAUDE_PLUGIN_DATA: dataDir })
+    assert.equal(r.status, 0, `hook exited ${r.status}; stderr: ${r.stderr}`)
+
+    const out = JSON.parse(r.stdout.trim())
+    assert.equal(out.hookSpecificOutput.hookEventName, 'SessionStart')
+
+    const ctx = out.hookSpecificOutput.additionalContext
+    assert.ok(
+      ctx.includes('2 block'),
+      `banner must include "2 block", got: ${ctx}`,
+    )
+    assert.ok(
+      ctx.includes('1 scrub'),
+      `banner must include "1 scrub", got: ${ctx}`,
+    )
+    assert.ok(
+      ctx.includes('next-turn-only'),
+      `banner must include next-turn-only caveat, got: ${ctx}`,
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('SessionStart with one entry older than 7d does not count that entry', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-ss-'))
+  try {
+    // Seed audit.jsonl with one block line that is 8 days old (outside the 7d window)
+    const now = Date.now()
+    const ts = new Date(now - 8 * 24 * 60 * 60 * 1000).toISOString() // 8 days ago
+
+    const oldRecord = JSON.stringify({
+      id: 'BBBBBBBBBBBBBBBBBBBBBBBBBB',
+      ts,
+      session_id: 'seed-sess-old',
+      cwd: '/tmp',
+      event: 'block',
+      hook: 'PreToolUse',
+      tool: 'Bash',
+      rule: 'test.rule',
+      matched: null,
+      input_summary: {},
+      decision: 'deny',
+      metadata: {},
+    }) + '\n'
+
+    writeFileSync(join(dataDir, 'audit.jsonl'), oldRecord, 'utf8')
+
+    const input = JSON.stringify({ session_id: 'ss-test-3', cwd: '/tmp' })
+    const r = runHookEnv(['SessionStart'], input, { CLAUDE_PLUGIN_DATA: dataDir })
+    assert.equal(r.status, 0, `hook exited ${r.status}; stderr: ${r.stderr}`)
+
+    const out = JSON.parse(r.stdout.trim())
+    assert.equal(out.hookSpecificOutput.hookEventName, 'SessionStart')
+
+    const ctx = out.hookSpecificOutput.additionalContext
+    // The 8-day-old entry must NOT be counted — banner should show "no events yet"
+    assert.ok(
+      /Sentinel active — no events yet/.test(ctx),
+      `expected "no events yet" banner when all entries are >7d old, got: ${ctx}`,
+    )
+    assert.ok(
+      ctx.includes('next-turn-only'),
+      `banner must include next-turn-only caveat, got: ${ctx}`,
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
   }
 })
