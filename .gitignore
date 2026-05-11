@@ -1,4 +1,5 @@
 .claude/
+!tests/fixtures/**/.claude/
 .developer/
 mvp-prod/
 research/
