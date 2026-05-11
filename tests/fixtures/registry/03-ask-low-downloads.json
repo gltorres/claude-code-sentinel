@@ -10,10 +10,13 @@
       "status": 200,
       "body": {
         "time": { "created": "2025-01-01T00:00:00.000Z" },
-        "downloads": { "weekly": 10 },
         "homepage": "https://example.com/obscure-utility",
         "repository": { "url": "https://github.com/example/obscure-utility" }
       }
+    },
+    "https://api.npmjs.org/downloads/point/last-week/obscure-utility": {
+      "status": 200,
+      "body": { "downloads": 10 }
     }
   },
   "expect": { "decision": "ask", "rule": "registry.low_downloads", "matched": "obscure-utility" }

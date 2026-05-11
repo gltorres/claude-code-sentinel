@@ -85,15 +85,19 @@ test('ask — package is too new (ageDays < minAgeDays)', async () => {
 });
 
 test('ask — package has low weekly downloads', async () => {
-  const fetchFn = async (_url, _opts) => ({
-    ok: true, status: 200,
-    json: async () => ({
-      time: { created: new Date(NOW - 60 * 86_400_000).toISOString() },
-      downloads: { weekly: 5 },
-      homepage: 'https://example.com',
-      repository: { url: 'https://github.com/x/y' },
-    }),
-  });
+  const fetchFn = async (url, _opts) => {
+    if (url.includes('api.npmjs.org/downloads')) {
+      return { ok: true, status: 200, json: async () => ({ downloads: 5 }) };
+    }
+    return {
+      ok: true, status: 200,
+      json: async () => ({
+        time: { created: new Date(NOW - 60 * 86_400_000).toISOString() },
+        homepage: 'https://example.com',
+        repository: { url: 'https://github.com/x/y' },
+      }),
+    };
+  };
   const cache = {};
   const r = await evaluateRegistry({
     command: 'npm install obscure-pkg',

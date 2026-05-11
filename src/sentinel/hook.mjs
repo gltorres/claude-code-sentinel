@@ -272,53 +272,53 @@ const config = loadConfig({ cwd: event.cwd })
 
 const which = process.argv[2]
 
-switch (which) {
-  case 'PreToolUse': {
-    const tool = event.tool_name ?? ''
-    const cwd = event.cwd ?? process.cwd()
+await (async () => {
+  switch (which) {
+    case 'PreToolUse': {
+      const tool = event.tool_name ?? ''
+      const cwd = event.cwd ?? process.cwd()
 
-    // Extract the path under test for the five protected tool types.
-    let filePath = null
-    if (tool === 'Read' || tool === 'Edit' || tool === 'Grep') {
-      filePath = event.tool_input?.file_path ?? event.tool_input?.path ?? null
-    } else if (tool === 'NotebookEdit') {
-      filePath = event.tool_input?.notebook_path ?? event.tool_input?.file_path ?? null
-    } else if (tool === 'Glob') {
-      // For Glob, the pattern itself is the path under test; resolve it against cwd.
-      filePath = event.tool_input?.pattern ?? null
-    }
-
-    if (filePath !== null &&
-        (tool === 'Read' || tool === 'Edit' || tool === 'Grep' ||
-         tool === 'Glob' || tool === 'NotebookEdit')) {
-      const result = matchPath({ filePath, cwd, home: homedir(), config })
-      if (result.decision === 'deny') {
-        const reason =
-          BANNER_PREFIX + `read of ${result.matched} blocked by ${result.rule}`
-        const decisionCtx = {
-          event: 'block',
-          decision: 'deny',
-          rule: result.rule,
-          matched: result.matched,
-        }
-        emit(
-          envelope('PreToolUse', {
-            permissionDecision: 'deny',
-            permissionDecisionReason: reason,
-          }),
-          decisionCtx,
-        )
-      } else {
-        emit(envelope('PreToolUse', {
-          permissionDecision: 'allow',
-          permissionDecisionReason: BANNER_PREFIX + 'path allowed',
-        }))
+      // Extract the path under test for the five protected tool types.
+      let filePath = null
+      if (tool === 'Read' || tool === 'Edit' || tool === 'Grep') {
+        filePath = event.tool_input?.file_path ?? event.tool_input?.path ?? null
+      } else if (tool === 'NotebookEdit') {
+        filePath = event.tool_input?.notebook_path ?? event.tool_input?.file_path ?? null
+      } else if (tool === 'Glob') {
+        // For Glob, the pattern itself is the path under test; resolve it against cwd.
+        filePath = event.tool_input?.pattern ?? null
       }
-    } else if (tool === 'Bash') {
-      const command = (event.tool_input && event.tool_input.command) || ''
-      const cachePath = resolveCachePath(process.env)
-      const cache = loadCache(cachePath)
-      await (async () => {
+
+      if (filePath !== null &&
+          (tool === 'Read' || tool === 'Edit' || tool === 'Grep' ||
+           tool === 'Glob' || tool === 'NotebookEdit')) {
+        const result = matchPath({ filePath, cwd, home: homedir(), config })
+        if (result.decision === 'deny') {
+          const reason =
+            BANNER_PREFIX + `read of ${result.matched} blocked by ${result.rule}`
+          const decisionCtx = {
+            event: 'block',
+            decision: 'deny',
+            rule: result.rule,
+            matched: result.matched,
+          }
+          emit(
+            envelope('PreToolUse', {
+              permissionDecision: 'deny',
+              permissionDecisionReason: reason,
+            }),
+            decisionCtx,
+          )
+        } else {
+          emit(envelope('PreToolUse', {
+            permissionDecision: 'allow',
+            permissionDecisionReason: BANNER_PREFIX + 'path allowed',
+          }))
+        }
+      } else if (tool === 'Bash') {
+        const command = (event.tool_input && event.tool_input.command) || ''
+        const cachePath = resolveCachePath(process.env)
+        const cache = loadCache(cachePath)
         await runBashBranch({
           command,
           cwd,
@@ -330,29 +330,32 @@ switch (which) {
           emit,
           envelope,
         })
-      })()
-      return // async IIFE calls emit() which calls process.exit(0); this return is belt-and-suspenders
-    } else {
-      // Unrecognised tool names: scaffold-allow (unchanged from Sprint 02)
+        return // async IIFE calls emit() which calls process.exit(0); this return is belt-and-suspenders
+      } else {
+        // Unrecognised tool names: scaffold-allow (unchanged from Sprint 02)
+        emit(envelope('PreToolUse', {
+          permissionDecision: 'allow',
+          permissionDecisionReason: BANNER_PREFIX + 'scaffold no-op',
+        }))
+      }
+      break
+    }
+    case 'PostToolUse':
+      emit(envelope('PostToolUse', { additionalContext: '' }))
+      break
+    case 'SessionStart':
+      emit(envelope('SessionStart', { additionalContext: '' }))
+      break
+    case 'SessionEnd':
+      emit(envelope('SessionEnd', { additionalContext: '' }))
+      break
+    case '--self-test':
+      // Handled by the top-level async self-test IIFE above; do nothing here.
+      break
+    default:
       emit(envelope('PreToolUse', {
         permissionDecision: 'allow',
-        permissionDecisionReason: BANNER_PREFIX + 'scaffold no-op',
+        permissionDecisionReason: BANNER_PREFIX + `unknown event ${which || '<none>'}; allowing fail-open`,
       }))
-    }
-    break
   }
-  case 'PostToolUse':
-    emit(envelope('PostToolUse', { additionalContext: '' }))
-    break
-  case 'SessionStart':
-    emit(envelope('SessionStart', { additionalContext: '' }))
-    break
-  case 'SessionEnd':
-    emit(envelope('SessionEnd', { additionalContext: '' }))
-    break
-  default:
-    emit(envelope('PreToolUse', {
-      permissionDecision: 'allow',
-      permissionDecisionReason: BANNER_PREFIX + `unknown event ${which || '<none>'}; allowing fail-open`,
-    }))
-}
+})()
