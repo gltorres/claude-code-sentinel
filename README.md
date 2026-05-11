@@ -17,12 +17,15 @@ v1, installable. Follow the install instructions below. All four defenses (path 
 You'll need Node.js 20.10 or newer and Git.
 
 ```bash
-$ node --version    # must be >= 20.10
-$ git clone https://github.com/gltorres/claude-code-sentinel.git
-$ cd claude-code-sentinel
-$ claude
-> /plugin marketplace add ./
-> /plugin install sentinel@claude-code-sentinel
+git clone https://github.com/gltorres/claude-code-sentinel.git
+cd claude-code-sentinel
+claude
+```
+Once inside the Claude Code Session:
+
+```bash
+/plugin marketplace add ./
+/plugin install sentinel@claude-code-sentinel
 ```
 
 After `/plugin install` finishes, restart Claude Code (or run `/reload-plugins`) so the hooks take effect. The next session prints a one-line Sentinel advisory on startup.
