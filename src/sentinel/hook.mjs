@@ -6,6 +6,7 @@ import process from 'node:process'
 import { loadConfig } from './config.mjs'
 import { writeAuditLine } from './audit.mjs'
 import { matchPath } from './paths.mjs'
+import { evaluateBash } from './bash-policy.mjs'
 
 const EVENT_NAMES = ['PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd']
 const MIN_NODE = '20.10.0'
@@ -150,8 +151,61 @@ switch (which) {
           permissionDecisionReason: BANNER_PREFIX + 'path allowed',
         }))
       }
+    } else if (tool === 'Bash') {
+      // Local helper: cap reason strings to avoid oversized stdout lines
+      const truncate = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s ?? ''))
+      const command = (event.tool_input && event.tool_input.command) || ''
+      let bashResult
+      try {
+        bashResult = evaluateBash({ command, cwd, home: homedir(), config })
+      } catch {
+        bashResult = { decision: 'allow', rule: null, matched: null, matched_segment: null }
+      }
+      if (bashResult.decision === 'deny') {
+        const seg = truncate(bashResult.matched_segment, 40)
+        const reason =
+          BANNER_PREFIX +
+          `bash segment '${seg}' reads ${bashResult.matched} (${bashResult.rule})`
+        emit(
+          envelope('PreToolUse', {
+            permissionDecision: 'deny',
+            permissionDecisionReason: reason,
+          }),
+          {
+            event: 'block',
+            decision: 'deny',
+            rule: bashResult.rule,
+            matched: bashResult.matched,
+            matched_segment: bashResult.matched_segment,
+          },
+        )
+      } else if (bashResult.decision === 'ask') {
+        const reason =
+          BANNER_PREFIX + 'bash shape not statically analysable; confirm before running'
+        emit(
+          envelope('PreToolUse', {
+            permissionDecision: 'ask',
+            permissionDecisionReason: reason,
+          }),
+          {
+            event: 'ask',
+            decision: 'ask',
+            rule: bashResult.rule || 'bash.exotic',
+            matched: null,
+            matched_segment: null,
+          },
+        )
+      } else {
+        emit(
+          envelope('PreToolUse', {
+            permissionDecision: 'allow',
+            permissionDecisionReason: BANNER_PREFIX + 'bash allowed',
+          }),
+          { event: 'warn', decision: 'allow', rule: null, matched: null, matched_segment: null },
+        )
+      }
     } else {
-      // Bash and unrecognised tool names: scaffold-allow (unchanged from Sprint 02)
+      // Unrecognised tool names: scaffold-allow (unchanged from Sprint 02)
       emit(envelope('PreToolUse', {
         permissionDecision: 'allow',
         permissionDecisionReason: BANNER_PREFIX + 'scaffold no-op',
