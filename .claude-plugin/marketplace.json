@@ -1,4 +1,9 @@
 {
+  "name": "claude-code-sentinel",
+  "owner": {
+    "name": "gltorres",
+    "url": "https://github.com/gltorres"
+  },
   "plugins": [
     {
       "name": "sentinel",
