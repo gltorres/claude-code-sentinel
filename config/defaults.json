@@ -20,7 +20,8 @@
       "**/.npmrc",
       "**/.pypirc",
       "**/.git-credentials",
-      "**/.netrc"
+      "**/.netrc",
+      "/etc/shadow"
     ],
     "allow": [
       "**/.env.example",

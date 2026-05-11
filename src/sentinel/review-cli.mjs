@@ -32,9 +32,9 @@ async function cmdSummary(config) {
   const counts = await summariseByEventClass({ config, sinceMs })
   const labels = ['block', 'ask', 'scrub', 'warn']
   for (const label of labels) {
-    process.stdout.write(`${label.padEnd(6)}: ${counts[label] ?? 0}\n`)
+    process.stdout.write(`${label}: ${counts[label] ?? 0}\n`)
   }
-  process.stdout.write(`${'total'.padEnd(6)}: ${counts.total ?? 0}\n`)
+  process.stdout.write(`total: ${counts.total ?? 0}\n`)
 }
 
 async function cmdRecent(config, args) {
