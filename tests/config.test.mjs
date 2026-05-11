@@ -138,3 +138,29 @@ test('defaults include populated paths.deny list', () => {
     rmSync(cwd, { recursive: true, force: true })
   }
 })
+
+test('defaults include populated registry and ecosystems sub-keys', () => {
+  const home = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  const cwd  = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  try {
+    const config = loadConfig({ home, cwd })
+
+    // registry sub-keys
+    assert.equal(typeof config.registry, 'object', 'registry must be an object')
+    assert.equal(config.registry.cacheTtlHours,         1,    'cacheTtlHours default')
+    assert.equal(config.registry.minAgeDays,            14,   'minAgeDays default')
+    assert.equal(config.registry.minWeeklyDownloads,    100,  'minWeeklyDownloads default')
+    assert.equal(config.registry.requireHomepage,       true, 'requireHomepage default')
+    assert.equal(config.registry.timeoutMs,             250,  'timeoutMs default')
+    assert.equal(config.registry.cacheMaxEntries,       1024, 'cacheMaxEntries default')
+
+    // ecosystems sub-keys
+    assert.equal(typeof config.ecosystems, 'object', 'ecosystems must be an object')
+    assert.equal(config.ecosystems.npm,    true, 'npm enabled by default')
+    assert.equal(config.ecosystems.pypi,   true, 'pypi enabled by default')
+    assert.equal(config.ecosystems.crates, true, 'crates enabled by default')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+    rmSync(cwd,  { recursive: true, force: true })
+  }
+})
