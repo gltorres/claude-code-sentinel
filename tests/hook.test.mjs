@@ -286,3 +286,19 @@ test('PreToolUse Read ~/.ssh/id_ed25519.pub is allowed', () => {
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
+
+test('--self-test: per-fixture in-process latency < 20 ms', () => {
+  const r = runHook(['--self-test'], '')
+  assert.equal(r.status, 0, `--self-test exited ${r.status}; stderr: ${r.stderr}`)
+  // Parse "Sentinel: self-test ok (N fixtures, X.Y ms total)" from stderr
+  const match = r.stderr.match(/self-test ok \((\d+) fixtures, ([\d.]+) ms total\)/)
+  assert.ok(match, `unexpected stderr format: ${r.stderr}`)
+  const fixtureCount = Number(match[1])
+  const totalMs = Number(match[2])
+  assert.ok(fixtureCount > 0, 'expected at least one fixture')
+  const perFixtureMs = totalMs / fixtureCount
+  assert.ok(
+    perFixtureMs < 20,
+    `per-fixture latency ${perFixtureMs.toFixed(2)} ms >= 20 ms (total ${totalMs} ms / ${fixtureCount} fixtures)`
+  )
+})

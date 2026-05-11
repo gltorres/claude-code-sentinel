@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Sentinel — single ESM hook entry. Static imports only.
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import process from 'node:process'
 import { loadConfig } from './config.mjs'
@@ -36,9 +36,49 @@ function emit(obj, decisionCtx = {}) {
   process.exit(0)
 }
 
-// --self-test branch: no-op, exit 0 (wired into `make validate` via Makefile)
+// --self-test branch: load fixtures, run matchPath in-process, report timing
 if (process.argv.includes('--self-test')) {
-  process.stderr.write(BANNER_PREFIX + 'self-test ok\n')
+  const fixturesDir = new URL('../../../tests/fixtures/paths', import.meta.url).pathname
+  const files = readdirSync(fixturesDir).filter(f => f.endsWith('.json'))
+  const selfTestConfig = loadConfig()
+  let failures = 0
+  const t0 = performance.now()
+  for (const file of files) {
+    const raw = readFileSync(fixturesDir + '/' + file, 'utf8')
+    const { event: fixtureEvent, expect: fixtureExpect } = JSON.parse(raw)
+    const toolName = fixtureEvent.tool_name
+    let filePath
+    if (toolName === 'Glob') {
+      filePath = fixtureEvent.tool_input.pattern
+    } else if (toolName === 'NotebookEdit') {
+      filePath = fixtureEvent.tool_input.notebook_path ?? fixtureEvent.tool_input.file_path
+    } else {
+      filePath = fixtureEvent.tool_input.file_path
+    }
+    const result = matchPath({
+      filePath,
+      cwd: fixtureEvent.cwd,
+      home: homedir(),
+      config: selfTestConfig,
+    })
+    const pass =
+      result.decision === fixtureExpect.decision &&
+      (result.rule ?? null) === (fixtureExpect.rule ?? null) &&
+      (result.matched ?? null) === (fixtureExpect.matched ?? null)
+    if (!pass) {
+      process.stderr.write(
+        BANNER_PREFIX + `self-test FAIL [${file}]: ` +
+        `expected ${JSON.stringify(fixtureExpect)} got ${JSON.stringify(result)}\n`
+      )
+      failures++
+    }
+  }
+  const elapsed = (performance.now() - t0).toFixed(1)
+  if (failures > 0) {
+    process.stderr.write(BANNER_PREFIX + `self-test failed (${failures} fixture(s))\n`)
+    process.exit(1)
+  }
+  process.stderr.write(BANNER_PREFIX + `self-test ok (${files.length} fixtures, ${elapsed} ms total)\n`)
   process.exit(0)
 }
 

@@ -1,0 +1,16 @@
+{
+  "event": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "test-session-fixture-paths-09",
+    "cwd": "/home/testuser/myproject",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/home/testuser/.ssh/id_rsa.pub"
+    }
+  },
+  "expect": {
+    "decision": "allow",
+    "rule": "paths.allow",
+    "matched": "**/*.pub"
+  }
+}
