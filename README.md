@@ -42,3 +42,25 @@ TBD
 Run `make refresh-data` (or `npm run refresh-data`) to pull the latest top-500
 package lists from upstream sources and rewrite the bundled JSON files under
 `src/sentinel/data/`.
+
+## Investigator agent
+
+When the hook blocks or scrubs and you want a full forensic report, invoke the investigator subagent directly in Claude Code:
+
+```
+/agent sentinel-investigator
+```
+
+**Mode A — package investigation:**
+> Investigate the npm package `lod4sh` version `4.17.21`
+
+**Mode B — leak investigation** (use the `id` from your audit log at `~/.claude/sentinel/audit.jsonl`):
+> Investigate audit entry `01HZ9K3V2P8QRMX4TNYW5D6J7B`, my secret prefix is `ghp_Ab`
+
+The full agent instructions are in `agents/sentinel-investigator.md`.
+
+Keep the bundled top-500 package lists current for accurate typosquat detection:
+
+```
+make refresh-data
+```
