@@ -20,15 +20,14 @@ You'll need Node.js 20.10 or newer and Git.
 $ node --version    # must be >= 20.10
 $ git clone https://github.com/gltorres/claude-code-sentinel.git
 $ cd claude-code-sentinel
-$ make validate
 $ claude
-> /plugin marketplace add ./claude-code-sentinel
+> /plugin marketplace add ./
 > /plugin install sentinel@claude-code-sentinel
 ```
 
 After `/plugin install` finishes, restart Claude Code (or run `/reload-plugins`) so the hooks take effect. The next session prints a one-line Sentinel advisory on startup.
 
-If `make validate` fails, check your Node version. There's no `npm install` step; Sentinel ships with zero runtime dependencies.
+Optional: run `make validate` before installing to sanity-check Node version and run the test suite locally. There's no `npm install` step; Sentinel ships with zero runtime dependencies.
 
 If the plugin doesn't show up in `/plugin list`, run `/plugin uninstall sentinel@claude-code-sentinel` and start again from the `/plugin marketplace add` step.
 
