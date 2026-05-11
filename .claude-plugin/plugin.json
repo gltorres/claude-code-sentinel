@@ -1,5 +1,5 @@
 {
   "name": "sentinel",
   "description": "Defense-in-depth hooks: secret-path deny, bash exfil deny, registry check, output scrubber, audit log.",
-  "author": { "name": "Sentinel maintainers", "email": "noreply@example.com" }
+  "author": { "name": "Sentinel maintainers" }
 }

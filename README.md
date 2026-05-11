@@ -34,7 +34,7 @@ If the plugin doesn't show up in `/plugin list`, run `/plugin uninstall sentinel
 
 ## Demo
 
-Run the four-scenario scripted demo. No Claude API key needed:
+Run the four-scenario scripted demo:
 
 ```bash
 make demo
@@ -188,7 +188,3 @@ Each run fetches the current top-500 lists from upstream sources (npm download s
 ### What the data is used for
 
 `agents/sentinel-investigator.md` (Mode A, step 3, typosquat distance check) computes the Levenshtein distance between the candidate package name and every name in the relevant ecosystem's bundled list. A distance of 1 or 2 from a popular package name gets flagged as a potential typosquat. The bundled lists are also used by `src/sentinel/levenshtein.mjs` in unit tests.
-
-## License
-
-TBD
