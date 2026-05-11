@@ -1,0 +1,11 @@
+{
+  "name": "claude-code-sentinel",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=20.10" },
+  "scripts": {
+    "test": "node --test tests/",
+    "self-test": "node src/sentinel/hook.mjs --self-test"
+  }
+}
