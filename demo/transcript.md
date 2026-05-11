@@ -36,7 +36,7 @@ with a synthetic event payload — no Claude API key or live session required.
 ```
 
 ```text
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"Sentinel: Package huggingface-cli-utils is only 3 days old (< 14)"}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"Sentinel: Package huggingface-cli-utils is only 3 days old (< 14) [registry.too_new]"}}
 ```
 
 ## Step 3 — scrubber: sk-ant-… in tool_response → redact
@@ -62,9 +62,9 @@ node src/sentinel/review-cli.mjs recent 3
 ```
 
 ```text
-2026-05-11T07:59:11.966Z | scrub | scrubber.anthropic |  | {"family":"anthropic","count":1}
-2026-05-11T07:59:11.915Z | ask | registry.too_new | huggingface-cli-utils | {"command_prefix":"pip install huggingface-cli-utils","matched_segment":"pip install huggingface-cli-utils"}
-2026-05-11T07:59:11.863Z | block | bash.cat | **/.env | {"command_prefix":"cat .env","matched_segment":"cat .env"}
+2026-05-11T08:20:17.587Z | scrub | scrubber.anthropic |  | {"family":"anthropic","count":1}
+2026-05-11T08:20:17.536Z | ask | registry.too_new | huggingface-cli-utils | {"command_prefix":"pip install huggingface-cli-utils","matched_segment":"pip install huggingface-cli-utils"}
+2026-05-11T08:20:17.485Z | block | bash.cat | **/.env | {"command_prefix":"cat .env","matched_segment":"cat .env"}
 ```
 
 ## Caveat — next-turn scrubber
