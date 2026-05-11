@@ -7,16 +7,16 @@
   "now": 1700000000000,
   "audit_lines": [
     {
-      "id": "01HGK0000000000000000001",
-      "ts": "2023-11-14T11:33:20.000Z",
+      "id": "01HGK0000000000000000003",
+      "ts": "2023-11-05T11:33:20.000Z",
       "session_id": "selftest-mixed",
       "cwd": "/tmp",
       "event": "block",
       "hook": "PreToolUse",
       "tool": "Bash",
       "rule": "paths.deny",
-      "matched": "/etc/passwd",
-      "input_summary": "cat /etc/passwd",
+      "matched": "/etc/shadow",
+      "input_summary": "cat /etc/shadow",
       "decision": "deny",
       "metadata": null
     },
@@ -35,16 +35,16 @@
       "metadata": null
     },
     {
-      "id": "01HGK0000000000000000003",
-      "ts": "2023-11-05T11:33:20.000Z",
+      "id": "01HGK0000000000000000001",
+      "ts": "2023-11-14T11:33:20.000Z",
       "session_id": "selftest-mixed",
       "cwd": "/tmp",
       "event": "block",
       "hook": "PreToolUse",
       "tool": "Bash",
       "rule": "paths.deny",
-      "matched": "/etc/shadow",
-      "input_summary": "cat /etc/shadow",
+      "matched": "/etc/passwd",
+      "input_summary": "cat /etc/passwd",
       "decision": "deny",
       "metadata": null
     }

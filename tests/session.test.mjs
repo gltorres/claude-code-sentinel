@@ -80,9 +80,9 @@ test('entries older than 7d are excluded from counts', () => {
   const auditPath = join(tmp, 'audit.jsonl')
   const now = Date.now()
   const lines = [
-    makeLine('block', 1 * ONE_DAY_MS, now),  // inside 7d — counts
-    makeLine('block', 8 * ONE_DAY_MS, now),  // outside 7d — excluded
     makeLine('scrub', 9 * ONE_DAY_MS, now),  // outside 7d — excluded
+    makeLine('block', 8 * ONE_DAY_MS, now),  // outside 7d — excluded
+    makeLine('block', 1 * ONE_DAY_MS, now),  // inside 7d — counts
   ]
   writeFileSync(auditPath, lines.join('\n') + '\n')
   const config = makeConfig(auditPath)
