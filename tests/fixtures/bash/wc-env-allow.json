@@ -1,0 +1,17 @@
+{
+  "event": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "self-test-bash-002",
+    "cwd": "/home/testuser/myproject",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "wc -l .env"
+    }
+  },
+  "expect": {
+    "decision": "allow",
+    "rule": null,
+    "matched": null,
+    "matched_segment": null
+  }
+}

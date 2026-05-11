@@ -6,6 +6,7 @@ import process from 'node:process'
 import { loadConfig } from './config.mjs'
 import { writeAuditLine } from './audit.mjs'
 import { matchPath } from './paths.mjs'
+import { evaluateBash } from './bash-policy.mjs'
 
 const EVENT_NAMES = ['PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd']
 const MIN_NODE = '20.10.0'
@@ -38,39 +39,52 @@ function emit(obj, decisionCtx = {}) {
 
 // --self-test branch: load fixtures, run matchPath in-process, report timing
 if (process.argv.includes('--self-test')) {
-  const fixturesDir = new URL('../../tests/fixtures/paths', import.meta.url).pathname
-  const files = readdirSync(fixturesDir).filter(f => f.endsWith('.json'))
+  const fixtureDirs = ['paths', 'bash']
   const selfTestConfig = loadConfig()
   let failures = 0
+  let count = 0
   const t0 = performance.now()
-  for (const file of files) {
-    const raw = readFileSync(fixturesDir + '/' + file, 'utf8')
-    const { event: fixtureEvent, expect: fixtureExpect } = JSON.parse(raw)
-    const toolName = fixtureEvent.tool_name
-    let filePath
-    if (toolName === 'Glob') {
-      filePath = fixtureEvent.tool_input.pattern
-    } else if (toolName === 'NotebookEdit') {
-      filePath = fixtureEvent.tool_input.notebook_path ?? fixtureEvent.tool_input.file_path
-    } else {
-      filePath = fixtureEvent.tool_input.file_path
-    }
-    const result = matchPath({
-      filePath,
-      cwd: fixtureEvent.cwd,
-      home: homedir(),
-      config: selfTestConfig,
-    })
-    const pass =
-      result.decision === fixtureExpect.decision &&
-      (result.rule ?? null) === (fixtureExpect.rule ?? null) &&
-      (result.matched ?? null) === (fixtureExpect.matched ?? null)
-    if (!pass) {
-      process.stderr.write(
-        BANNER_PREFIX + `self-test FAIL [${file}]: ` +
-        `expected ${JSON.stringify(fixtureExpect)} got ${JSON.stringify(result)}\n`
-      )
-      failures++
+  for (const dir of fixtureDirs) {
+    const fixturesDir = new URL(`../../tests/fixtures/${dir}`, import.meta.url).pathname
+    const files = readdirSync(fixturesDir).filter(f => f.endsWith('.json'))
+    for (const file of files) {
+      const raw = readFileSync(fixturesDir + '/' + file, 'utf8')
+      const { event: fixtureEvent, expect: fixtureExpect } = JSON.parse(raw)
+      const toolName = fixtureEvent.tool_name
+      let result
+      if (toolName === 'Bash') {
+        result = evaluateBash({
+          command: fixtureEvent.tool_input.command,
+          cwd: fixtureEvent.cwd,
+          home: homedir(),
+          config: selfTestConfig,
+        })
+      } else {
+        let filePath
+        if (toolName === 'Glob') {
+          filePath = fixtureEvent.tool_input.pattern
+        } else if (toolName === 'NotebookEdit') {
+          filePath = fixtureEvent.tool_input.notebook_path ?? fixtureEvent.tool_input.file_path
+        } else {
+          filePath = fixtureEvent.tool_input.file_path
+        }
+        result = matchPath({
+          filePath,
+          cwd: fixtureEvent.cwd,
+          home: homedir(),
+          config: selfTestConfig,
+        })
+      }
+      const expectKeys = Object.keys(fixtureExpect)
+      const pass = expectKeys.every(k => (result[k] ?? null) === (fixtureExpect[k] ?? null))
+      if (!pass) {
+        process.stderr.write(
+          BANNER_PREFIX + `self-test FAIL [${file}]: ` +
+          `expected ${JSON.stringify(fixtureExpect)} got ${JSON.stringify(result)}\n`
+        )
+        failures++
+      }
+      count++
     }
   }
   const elapsed = (performance.now() - t0).toFixed(1)
@@ -78,7 +92,7 @@ if (process.argv.includes('--self-test')) {
     process.stderr.write(BANNER_PREFIX + `self-test failed (${failures} fixture(s))\n`)
     process.exit(1)
   }
-  process.stderr.write(BANNER_PREFIX + `self-test ok (${files.length} fixtures, ${elapsed} ms total)\n`)
+  process.stderr.write(BANNER_PREFIX + `self-test ok (${count} fixtures, ${elapsed} ms total)\n`)
   process.exit(0)
 }
 
@@ -150,8 +164,61 @@ switch (which) {
           permissionDecisionReason: BANNER_PREFIX + 'path allowed',
         }))
       }
+    } else if (tool === 'Bash') {
+      // Local helper: cap reason strings to avoid oversized stdout lines
+      const truncate = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s ?? ''))
+      const command = (event.tool_input && event.tool_input.command) || ''
+      let bashResult
+      try {
+        bashResult = evaluateBash({ command, cwd, home: homedir(), config })
+      } catch {
+        bashResult = { decision: 'allow', rule: null, matched: null, matched_segment: null }
+      }
+      if (bashResult.decision === 'deny') {
+        const seg = truncate(bashResult.matched_segment, 40)
+        const reason =
+          BANNER_PREFIX +
+          `bash segment '${seg}' reads ${bashResult.matched} (${bashResult.rule})`
+        emit(
+          envelope('PreToolUse', {
+            permissionDecision: 'deny',
+            permissionDecisionReason: reason,
+          }),
+          {
+            event: 'block',
+            decision: 'deny',
+            rule: bashResult.rule,
+            matched: bashResult.matched,
+            matched_segment: bashResult.matched_segment,
+          },
+        )
+      } else if (bashResult.decision === 'ask') {
+        const reason =
+          BANNER_PREFIX + 'bash shape not statically analysable; confirm before running'
+        emit(
+          envelope('PreToolUse', {
+            permissionDecision: 'ask',
+            permissionDecisionReason: reason,
+          }),
+          {
+            event: 'ask',
+            decision: 'ask',
+            rule: bashResult.rule || 'bash.exotic',
+            matched: null,
+            matched_segment: null,
+          },
+        )
+      } else {
+        emit(
+          envelope('PreToolUse', {
+            permissionDecision: 'allow',
+            permissionDecisionReason: BANNER_PREFIX + 'bash allowed',
+          }),
+          { event: 'warn', decision: 'allow', rule: null, matched: null, matched_segment: null },
+        )
+      }
     } else {
-      // Bash and unrecognised tool names: scaffold-allow (unchanged from Sprint 02)
+      // Unrecognised tool names: scaffold-allow (unchanged from Sprint 02)
       emit(envelope('PreToolUse', {
         permissionDecision: 'allow',
         permissionDecisionReason: BANNER_PREFIX + 'scaffold no-op',

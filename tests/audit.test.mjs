@@ -160,3 +160,35 @@ test('writeAuditLine without decision arg keeps warn/allow defaults', () => {
   assert.equal(parsed.rule, null)
   assert.equal(parsed.matched, null)
 })
+
+// (j) For a Bash deny decision, input_summary.matched_segment is populated from
+// decisionCtx.matched_segment (not null). Top-level field order is unchanged.
+// NOTE: We do NOT re-assert Object.keys order here — that is covered by test (a)
+// at lines 31-40. Only the sub-object value changes.
+test('Bash deny audit line has non-null input_summary.matched_segment', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'sentinel-audit-bash-'))
+  const config = makeTempConfig(tmp)
+  const denyCtx = {
+    event: 'block',
+    decision: 'deny',
+    rule: 'bash.deny',
+    matched: '**/.env',
+    matched_segment: 'cat .env',
+  }
+  writeAuditLine(
+    config,
+    'PreToolUse',
+    { tool_name: 'Bash', tool_input: { command: 'cat .env' } },
+    denyCtx,
+  )
+  const raw = readFileSync(join(tmp, 'audit.jsonl'), 'utf8').trim()
+  const parsed = JSON.parse(raw.split('\n')[0])
+  assert.equal(parsed.event, 'block')
+  assert.equal(parsed.decision, 'deny')
+  assert.equal(parsed.rule, 'bash.deny')
+  assert.equal(
+    parsed.input_summary.matched_segment,
+    'cat .env',
+    'matched_segment must be populated from decisionCtx on a Bash deny',
+  )
+})

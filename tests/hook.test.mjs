@@ -296,9 +296,92 @@ test('--self-test: per-fixture in-process latency < 20 ms', () => {
   const fixtureCount = Number(match[1])
   const totalMs = Number(match[2])
   assert.ok(fixtureCount > 0, 'expected at least one fixture')
+  assert.ok(fixtureCount >= 21, `expected >= 21 fixtures (paths + bash), got ${fixtureCount}`)
   const perFixtureMs = totalMs / fixtureCount
   assert.ok(
     perFixtureMs < 20,
     `per-fixture latency ${perFixtureMs.toFixed(2)} ms >= 20 ms (total ${totalMs} ms / ${fixtureCount} fixtures)`
   )
+})
+
+// ─── Bash-exfil integration tests (Sprint 04, Spec 4) ─────────────────────────
+
+// Helper: build a PreToolUse Bash event JSON string.
+function makeBashEvent(command, cwd = '/tmp/project') {
+  return JSON.stringify({
+    session_id: 'bash-test-sess',
+    cwd,
+    tool_name: 'Bash',
+    tool_input: { command },
+  })
+}
+
+// Test 9: Bash deny — cat reads a secret path
+test('PreToolUse Bash cat .env is denied', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-bash-'))
+  try {
+    const r = runHookEnv(
+      ['PreToolUse'],
+      makeBashEvent('cat .env'),
+      { CLAUDE_PLUGIN_DATA: dataDir },
+    )
+    assert.equal(r.status, 0)
+    const out = JSON.parse(r.stdout.trim())
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny')
+    assert.ok(
+      out.hookSpecificOutput.permissionDecisionReason.startsWith('Sentinel: '),
+      'reason must start with BANNER_PREFIX',
+    )
+    const rec = readAuditRecord(dataDir)
+    assert.equal(rec.event, 'block')
+    assert.equal(rec.decision, 'deny')
+    assert.ok(rec.rule, 'rule should be non-empty')
+    assert.ok(
+      rec.input_summary.matched_segment,
+      'input_summary.matched_segment must be non-null on a Bash deny',
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// Test 10: Bash allow — wc is a value-stripping command
+test('PreToolUse Bash wc -l .env is allowed', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-bash-'))
+  try {
+    const r = runHookEnv(
+      ['PreToolUse'],
+      makeBashEvent('wc -l .env'),
+      { CLAUDE_PLUGIN_DATA: dataDir },
+    )
+    assert.equal(r.status, 0)
+    const out = JSON.parse(r.stdout.trim())
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'allow')
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// Test 11: Bash ask — heredoc is an exotic shape
+test('PreToolUse Bash heredoc produces ask decision', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-bash-'))
+  try {
+    const r = runHookEnv(
+      ['PreToolUse'],
+      makeBashEvent('cat <<EOF\nfoo\nEOF'),
+      { CLAUDE_PLUGIN_DATA: dataDir },
+    )
+    assert.equal(r.status, 0)
+    const out = JSON.parse(r.stdout.trim())
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'ask')
+    assert.ok(
+      out.hookSpecificOutput.permissionDecisionReason.startsWith('Sentinel: '),
+      'reason must start with BANNER_PREFIX',
+    )
+    const rec = readAuditRecord(dataDir)
+    assert.equal(rec.event, 'ask')
+    assert.equal(rec.decision, 'ask')
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
 })

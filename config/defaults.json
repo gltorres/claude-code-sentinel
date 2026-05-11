@@ -30,7 +30,12 @@
       "**/*.public.*"
     ]
   },
-  "bash": {},
+  "bash": {
+    "denyCommands": ["cat","head","tail","less","more","bat","view","xxd","hexdump","base64","grep","rg","awk","sed","perl","cp","mv","tee","pbcopy","xclip","nc","curl"],
+    "warnCommands": [],
+    "allowValueStripping": true,
+    "valueStrippingCommands": ["wc","file","stat","ls","du","shasum","sha256sum","md5sum"]
+  },
   "registry": {},
   "ecosystems": {},
   "scrubber": {},

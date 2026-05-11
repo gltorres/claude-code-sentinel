@@ -1,0 +1,17 @@
+{
+  "event": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "self-test-bash-005",
+    "cwd": "/home/testuser/myproject",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cat .env > /tmp/out"
+    }
+  },
+  "expect": {
+    "decision": "deny",
+    "rule": "bash.cat",
+    "matched": "**/.env",
+    "matched_segment": "cat .env"
+  }
+}
