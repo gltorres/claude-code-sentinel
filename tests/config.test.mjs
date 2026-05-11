@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
-import { loadConfig } from '../src/sentinel/config.mjs'
+import { loadConfig, loadConfigWithSources } from '../src/sentinel/config.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -201,5 +201,120 @@ test('scrubber overrides merge correctly through all three layers', () => {
   } finally {
     rmSync(home, { recursive: true, force: true })
     rmSync(cwd,  { recursive: true, force: true })
+  }
+})
+
+// ── loadConfigWithSources tests ───────────────────────────────────────────────
+
+test('loadConfigWithSources: defaults-only — every source label is "default"', () => {
+  const home = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  const cwd = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  try {
+    const { value, sources } = loadConfigWithSources({ home, cwd })
+    // value must deep-equal loadConfig output
+    assert.deepEqual(value, loadConfig({ home, cwd }))
+    // every leaf in sources must be 'default'
+    assert.equal(sources.audit.path, 'default')
+    assert.equal(sources.audit.maxSizeMb, 'default')
+    assert.equal(sources.scrubber.enabled, 'default')
+    assert.equal(sources.scrubber.extraPatterns, 'default')
+    assert.equal(sources.paths.deny, 'default')
+    assert.equal(sources.paths.allow, 'default')
+    assert.equal(sources.registry.cacheTtlHours, 'default')
+    assert.equal(sources.registry.minAgeDays, 'default')
+    assert.equal(sources.ecosystems.npm, 'default')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test('loadConfigWithSources: user override of one scalar — that leaf is "user", rest "default"', () => {
+  const home = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  const cwd = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  try {
+    writeSentinel(home, { audit: { maxSizeMb: 5 } })
+    const { value, sources } = loadConfigWithSources({ home, cwd })
+    // value must deep-equal loadConfig output
+    assert.deepEqual(value, loadConfig({ home, cwd }))
+    assert.equal(value.audit.maxSizeMb, 5)
+    // the overridden leaf must be labeled 'user'
+    assert.equal(sources.audit.maxSizeMb, 'user')
+    // the sibling leaf (audit.path) was not overridden — must remain 'default'
+    assert.equal(sources.audit.path, 'default')
+    // unrelated leaves must remain 'default'
+    assert.equal(sources.scrubber.enabled, 'default')
+    assert.equal(sources.registry.cacheTtlHours, 'default')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test('loadConfigWithSources: all three layers — project overrides user overrides default', () => {
+  const home = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  const cwd = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  try {
+    writeSentinel(home, { audit: { maxSizeMb: 5 }, registry: { minAgeDays: 7 } })
+    writeSentinel(cwd, { audit: { maxSizeMb: 99 } })
+    const { value, sources } = loadConfigWithSources({ home, cwd })
+    // value must deep-equal loadConfig output
+    assert.deepEqual(value, loadConfig({ home, cwd }))
+    assert.equal(value.audit.maxSizeMb, 99)
+    // project wins for audit.maxSizeMb
+    assert.equal(sources.audit.maxSizeMb, 'project')
+    // user wins for registry.minAgeDays (project did not override it)
+    assert.equal(sources.registry.minAgeDays, 'user')
+    // default wins for everything else
+    assert.equal(sources.audit.path, 'default')
+    assert.equal(sources.scrubber.enabled, 'default')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test('loadConfigWithSources: nested object merge — independent leaves keep their own source labels', () => {
+  const home = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  const cwd = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  try {
+    // user sets scrubber.enabled; project sets scrubber.extraPatterns — both within "scrubber"
+    writeSentinel(home, { scrubber: { enabled: false } })
+    writeSentinel(cwd, { scrubber: { extraPatterns: ['MY_SECRET'] } })
+    const { value, sources } = loadConfigWithSources({ home, cwd })
+    // value must deep-equal loadConfig output
+    assert.deepEqual(value, loadConfig({ home, cwd }))
+    assert.equal(value.scrubber.enabled, false)
+    assert.deepEqual(value.scrubber.extraPatterns, ['MY_SECRET'])
+    // each leaf inside the same sub-object has its own attribution
+    assert.equal(sources.scrubber.enabled, 'user',
+      'scrubber.enabled was set by user layer')
+    assert.equal(sources.scrubber.extraPatterns, 'project',
+      'scrubber.extraPatterns was set by project layer')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test('loadConfigWithSources: array override — project array fully shadows user array, label is "project"', () => {
+  const home = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  const cwd = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  try {
+    writeSentinel(home, { paths: { deny: ['**/.env', '**/user-secret'] } })
+    writeSentinel(cwd, { paths: { deny: ['**/project-secret'] } })
+    const { value, sources } = loadConfigWithSources({ home, cwd })
+    // value must deep-equal loadConfig output
+    assert.deepEqual(value, loadConfig({ home, cwd }))
+    // project array fully replaces the user array (last-write-wins, no per-element merge)
+    assert.deepEqual(value.paths.deny, ['**/project-secret'])
+    // the source label for the array leaf is 'project' — not a per-element array
+    assert.equal(sources.paths.deny, 'project',
+      'array is an opaque leaf: project label wins, no per-element attribution')
+    // paths.allow was not overridden by either layer — must be 'default'
+    assert.equal(sources.paths.allow, 'default')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
   }
 })
