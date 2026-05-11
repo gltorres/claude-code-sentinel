@@ -61,7 +61,8 @@ if (raw.trim().length > 0) {
 }
 
 // Sprint 02: load merged config (shipped defaults + user + project overlays)
-const config = loadConfig()
+// Pass event.cwd so the project-level sentinel.json is found correctly.
+const config = loadConfig({ cwd: event.cwd })
 
 const which = process.argv[2]
 
