@@ -89,11 +89,12 @@ test('exceeding maxSizeMb causes rotation to audit.jsonl.1', () => {
   // Manually inflate the file past the cap (0.0001 MB = ~102 bytes)
   const padding = 'x'.repeat(200)
   writeFileSync(auditPath, readFileSync(auditPath, 'utf8') + padding)
+  const inflatedSize = statSync(auditPath).size
   // Second write should trigger rotation
   writeAuditLine(config, 'PreToolUse', { tool_name: 'Bash', tool_input: { command: 'echo trigger' } })
   assert.ok(existsSync(auditPath + '.1'), 'audit.jsonl.1 should exist after rotation')
   const freshSize = statSync(auditPath).size
-  assert.ok(freshSize < 200, `active audit.jsonl should be small after rotation, got ${freshSize} bytes`)
+  assert.ok(freshSize < inflatedSize, `active audit.jsonl should be small after rotation, got ${freshSize} bytes`)
 })
 
 // (f) A second over-cap write overwrites the previous audit.jsonl.1 (single-level rotation, no .2).

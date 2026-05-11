@@ -33,9 +33,11 @@ export function summariseInput(hookEvent, tool, eventJson) {
     }
   }
   if (tool === 'Bash') {
-    // Truncate at 80 chars so long pipelines with user-supplied strings are not echoed verbatim
+    // Truncate at 80 chars, then scrub sk-ant-* tokens so secrets never reach the log
+    const raw = String(eventJson.tool_input?.command ?? '').slice(0, 80)
+    const scrubbed = raw.replace(/sk-ant-[A-Za-z0-9_-]+/g, '[REDACTED]')
     return {
-      command_prefix: String(eventJson.tool_input?.command ?? '').slice(0, 80),
+      command_prefix: scrubbed,
       matched_segment: null,
     }
   }
