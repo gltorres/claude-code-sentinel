@@ -36,3 +36,9 @@ TBD
 /plugin install sentinel@claude-code-sentinel
 /reload-plugins
 ```
+
+## Data Refresh
+
+Run `make refresh-data` (or `npm run refresh-data`) to pull the latest top-500
+package lists from upstream sources and rewrite the bundled JSON files under
+`src/sentinel/data/`.

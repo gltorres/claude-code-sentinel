@@ -6,6 +6,7 @@
   "engines": { "node": ">=20.10" },
   "scripts": {
     "test": "node --test tests/",
-    "self-test": "node src/sentinel/hook.mjs --self-test"
+    "self-test": "node src/sentinel/hook.mjs --self-test",
+    "refresh-data": "node tools/refresh_top_packages.mjs"
   }
 }

@@ -1,4 +1,4 @@
-.PHONY: validate test demo
+.PHONY: validate test demo refresh-data
 
 validate:
 	@for f in .claude-plugin/plugin.json hooks/sentinel.json src/sentinel/data/*.json; do \
@@ -13,3 +13,6 @@ test:
 
 demo:
 	@echo "demo not yet implemented (Sprint 10)"
+
+refresh-data:
+	@node tools/refresh_top_packages.mjs
