@@ -163,7 +163,7 @@ if (process.argv.includes('--self-test')) {
       return undefined
     }
 
-    const fixtureDirs = ['paths', 'bash', 'registry']
+    const fixtureDirs = ['paths', 'bash', 'registry', 'scrubber']
     const selfTestConfig = loadConfig()
     let failures = 0
     let count = 0
@@ -225,6 +225,20 @@ if (process.argv.includes('--self-test')) {
             cache,
             now: fixture.now ?? Date.now(),
           })
+        } else if (bucket === 'scrubber') {
+          const text = String(fixtureEvent.tool_response ?? '')
+          const fixtureConfig = fixture.config ?? selfTestConfig
+          const result = scrubResponse({ text, config: fixtureConfig })
+          // Map scrubResponse result to the shape the comparator expects.
+          // rule: first family that fired (prefixed), or null if none.
+          // decision: always 'allow' (PostToolUse is additive-only).
+          // matched: always null (the matched value is the secret — never log it).
+          const firstFamily = result.redactions.length > 0 ? result.redactions[0].family : null
+          actual = {
+            decision: result.decision,
+            rule: firstFamily != null ? 'scrubber.' + firstFamily : null,
+            matched: result.matched,
+          }
         }
         const expectKeys = Object.keys(fixtureExpect)
         const pass = expectKeys.every(k => (actual[k] ?? null) === (fixtureExpect[k] ?? null))
