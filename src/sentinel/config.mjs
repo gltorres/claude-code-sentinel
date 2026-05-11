@@ -63,3 +63,40 @@ export function loadConfig({ home, cwd } = {}) {
 
   return deepMerge(deepMerge(defaults, user), project)
 }
+
+// Replace every leaf value in obj with label.
+// Plain objects are recursed into; arrays and scalars are opaque leaves.
+// Returns a new object — does not mutate obj.
+function tagLeaves(obj, label) {
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+    // Scalar or array — this IS the leaf; replace with label.
+    return label
+  }
+  const out = {}
+  for (const key of Object.keys(obj)) {
+    out[key] = tagLeaves(obj[key], label)
+  }
+  return out
+}
+
+// Load and merge all three config layers, returning both the merged value and
+// a parallel "sources" object where every leaf is 'default' | 'user' | 'project'.
+// value is guaranteed to deepEqual loadConfig({ home, cwd }) for the same inputs.
+// home and cwd can be injected for testing; production callers omit both.
+export function loadConfigWithSources({ home, cwd } = {}) {
+  const homeDir = home || homedir()
+  const cwdDir = cwd || process.cwd()
+
+  const defaults = loadLayer(DEFAULTS_PATH)
+  const user = loadLayer(join(homeDir, '.claude', 'sentinel.json'))
+  const project = loadLayer(join(cwdDir, '.claude', 'sentinel.json'))
+
+  const value = deepMerge(deepMerge(defaults, user), project)
+
+  const tagDefaults = tagLeaves(defaults, 'default')
+  const tagUser = tagLeaves(user, 'user')
+  const tagProject = tagLeaves(project, 'project')
+  const sources = deepMerge(deepMerge(tagDefaults, tagUser), tagProject)
+
+  return { value, sources }
+}

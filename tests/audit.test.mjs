@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
-import { writeAuditLine, summariseInput } from '../src/sentinel/audit.mjs'
+import { writeAuditLine, summariseInput, tailAuditEntries, findAuditEntryById, summariseByEventClass } from '../src/sentinel/audit.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -191,4 +191,142 @@ test('Bash deny audit line has non-null input_summary.matched_segment', () => {
     'cat .env',
     'matched_segment must be populated from decisionCtx on a Bash deny',
   )
+})
+
+// ── audit-readers: tailAuditEntries — empty file ──────────────────────────────
+
+test('tailAuditEntries returns empty array for empty audit file', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'sentinel-audit-tail-'))
+  const auditPath = join(tmp, 'audit.jsonl')
+  writeFileSync(auditPath, '')
+  const config = { audit: { path: auditPath } }
+  const results = tailAuditEntries({ config, n: 10, paths: [auditPath] })
+  assert.deepEqual(results, [])
+})
+
+// ── audit-readers: tailAuditEntries — single entry ───────────────────────────
+
+test('tailAuditEntries returns a single entry from a one-line file', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'sentinel-audit-tail-'))
+  const auditPath = join(tmp, 'audit.jsonl')
+  const config = { audit: { path: auditPath } }
+  // Write one real record via the writer so the schema is guaranteed correct
+  writeAuditLine(
+    config,
+    'PreToolUse',
+    { tool_name: 'Bash', tool_input: { command: 'echo hello' } },
+    { event: 'warn', decision: 'allow', rule: null, matched: null },
+  )
+  const results = tailAuditEntries({ config, n: 5, paths: [auditPath] })
+  assert.equal(results.length, 1)
+  assert.equal(typeof results[0].id, 'string')
+  assert.equal(results[0].hook, 'PreToolUse')
+})
+
+// ── audit-readers: tailAuditEntries — across rotation boundary ───────────────
+
+test('tailAuditEntries spans primary and rotated file to reach n results', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'sentinel-audit-tail-'))
+  const primaryPath = join(tmp, 'audit.jsonl')
+  const rotatedPath = primaryPath + '.1'
+  const config = { audit: { path: primaryPath } }
+
+  // Write 2 entries to the rotated file (older), 1 entry to primary (newer)
+  const olderRecord1 = JSON.stringify({
+    id: '01ARZ3NDEKTSV4RRFFQ69G5FAV',
+    ts: new Date(Date.now() - 3000).toISOString(),
+    session_id: '', cwd: '/old', event: 'block', hook: 'PreToolUse',
+    tool: 'Bash', rule: 'bash.deny', matched: '**/.env',
+    input_summary: {}, decision: 'deny', metadata: {},
+  })
+  const olderRecord2 = JSON.stringify({
+    id: '01ARZ3NDEKTSV4RRFFQ69G5FBV',
+    ts: new Date(Date.now() - 4000).toISOString(),
+    session_id: '', cwd: '/old2', event: 'ask', hook: 'PreToolUse',
+    tool: 'Read', rule: null, matched: null,
+    input_summary: {}, decision: 'ask', metadata: {},
+  })
+  writeFileSync(rotatedPath, olderRecord1 + '\n' + olderRecord2 + '\n')
+  writeAuditLine(
+    config,
+    'PreToolUse',
+    { tool_name: 'Read', tool_input: { file_path: '/foo.txt' } },
+    { event: 'warn', decision: 'allow', rule: null, matched: null },
+  )
+
+  // Request 3 entries: should come from both files (1 from primary, 2 from rotated)
+  const results = tailAuditEntries({ config, n: 3, paths: [primaryPath, rotatedPath] })
+  assert.equal(results.length, 3, 'should return 3 entries spanning both files')
+  // The primary-file entry is newest, so it should be first
+  assert.equal(results[0].cwd !== '/old' && results[0].cwd !== '/old2', true,
+    'first result should be from the primary (newer) file')
+})
+
+// ── audit-readers: findAuditEntryById — hit and miss ─────────────────────────
+
+test('findAuditEntryById returns matching record on hit, null on miss', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'sentinel-audit-byid-'))
+  const auditPath = join(tmp, 'audit.jsonl')
+  const TARGET_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAV'
+  const targetRecord = JSON.stringify({
+    id: TARGET_ID,
+    ts: new Date().toISOString(),
+    session_id: '', cwd: '/some/path', event: 'block', hook: 'PreToolUse',
+    tool: 'Bash', rule: 'bash.deny', matched: '.env',
+    input_summary: { command_prefix: 'cat .env', matched_segment: null },
+    decision: 'deny', metadata: {},
+  })
+  writeFileSync(auditPath, targetRecord + '\n')
+
+  const config = { audit: { path: auditPath } }
+  // Hit: id present in the file
+  const found = findAuditEntryById({ config, id: TARGET_ID, paths: [auditPath] })
+  assert.ok(found !== null, 'should find the record')
+  assert.equal(found.id, TARGET_ID)
+  assert.equal(found.event, 'block')
+
+  // Miss: id not present
+  const notFound = findAuditEntryById({
+    config,
+    id: '01ARZ3NDEKTSV4RRFFQ69G5FZZ',
+    paths: [auditPath],
+  })
+  assert.equal(notFound, null, 'should return null for an id not in the file')
+})
+
+// ── audit-readers: summariseByEventClass — 7-day window cutoff ───────────────
+
+test('summariseByEventClass counts only records within the sinceMs window', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'sentinel-audit-summary-'))
+  const auditPath = join(tmp, 'audit.jsonl')
+  const now = Date.now()
+  const sevenDaysMs = 7 * 24 * 60 * 60 * 1000
+
+  // Inside window — 1 day ago
+  const inside = JSON.stringify({
+    id: '01ARZ3NDEKTSV4RRFFQ69G5FAV',
+    ts: new Date(now - 1 * 24 * 60 * 60 * 1000).toISOString(),
+    session_id: '', cwd: '/', event: 'block', hook: 'PreToolUse',
+    tool: 'Bash', rule: 'bash.deny', matched: '.env',
+    input_summary: {}, decision: 'deny', metadata: {},
+  })
+  // Outside window — 8 days ago
+  const outside = JSON.stringify({
+    id: '01ARZ3NDEKTSV4RRFFQ69G5FBV',
+    ts: new Date(now - 8 * 24 * 60 * 60 * 1000).toISOString(),
+    session_id: '', cwd: '/', event: 'ask', hook: 'PreToolUse',
+    tool: 'Read', rule: null, matched: null,
+    input_summary: {}, decision: 'ask', metadata: {},
+  })
+  writeFileSync(auditPath, inside + '\n' + outside + '\n')
+
+  const config = { audit: { path: auditPath } }
+  const sinceMs = now - sevenDaysMs
+  const result = summariseByEventClass({ config, sinceMs, paths: [auditPath] })
+
+  assert.equal(result.block, 1, 'block count should be 1 (inside window)')
+  assert.equal(result.ask, 0, 'ask count should be 0 (outside window)')
+  assert.equal(result.scrub, 0)
+  assert.equal(result.warn, 0)
+  assert.equal(result.total, 1, 'total should be 1')
 })

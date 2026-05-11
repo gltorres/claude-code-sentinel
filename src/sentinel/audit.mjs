@@ -1,7 +1,7 @@
 // Sentinel audit writer — Sprint 02, Spec 3.
 // Appends one JSONL line per hook event to a size-capped rotating log file.
 // Never throws — all I/O errors are silently swallowed (fail-open contract).
-import { statSync, renameSync, mkdirSync, appendFileSync } from 'node:fs'
+import { statSync, renameSync, mkdirSync, appendFileSync, openSync, readSync, closeSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { ulid } from './ulid.mjs'
@@ -97,4 +97,162 @@ export function writeAuditLine(
     mkdirSync(dirname(path), { recursive: true })
     appendFileSync(path, JSON.stringify(record) + '\n')
   } catch {}
+}
+
+// Private helper — resolves the ordered list of audit file paths to scan.
+// Returns [primary] when the rotated file does not exist, or
+// [primary, primary + '.1'] when both exist.
+// When callers supply an explicit `paths` array it is used as-is; this
+// helper is only invoked when `paths` is undefined.
+function listAuditPaths(config) {
+  const primary = resolveAuditPath(config)
+  return [primary, primary + '.1'].filter(existsSync)
+}
+
+const TAIL_CHUNK_SIZE = 8 * 1024 // 8 KiB, same as session.mjs
+
+// Return the most-recent `n` audit records, newest-first, by reverse-chunk scan.
+//
+// Parameters:
+//   config  {object}   — merged Sentinel config (as returned by loadConfig)
+//   n       {number}   — maximum number of records to return (default 20)
+//   paths   {string[]} — explicit list of file paths to scan, newest first.
+//                        When omitted, defaults to [primary, primary+'.1'] filtered
+//                        to existing files via listAuditPaths(config).
+//
+// Returns: Array of parsed record objects, newest first. Empty array on any
+//          I/O error or when no matching records exist.
+//
+// Fail-open: errors from individual files are silently skipped.
+export function tailAuditEntries({ config, n = 20, paths } = {}) {
+  const filePaths = paths ?? listAuditPaths(config)
+  const results = []
+
+  for (const filePath of filePaths) {
+    if (results.length >= n) break
+
+    let size
+    try { size = statSync(filePath).size } catch { continue }
+    if (size === 0) continue
+
+    let fd
+    try {
+      fd = openSync(filePath, 'r')
+      const buf = Buffer.allocUnsafe(TAIL_CHUNK_SIZE)
+      let remaining = size
+      // carry holds an incomplete line fragment from the right edge of the
+      // previous (more-rightward) chunk — same pattern as session.mjs:39
+      let carry = ''
+
+      while (remaining > 0 && results.length < n) {
+        const readSize = Math.min(TAIL_CHUNK_SIZE, remaining)
+        const offset = remaining - readSize
+        const bytesRead = readSync(fd, buf, 0, readSize, offset)
+        remaining -= bytesRead
+
+        // Prepend chunk text to carry so carry stays at the right boundary
+        const chunkText = buf.toString('utf8', 0, bytesRead)
+        const combined = chunkText + carry
+
+        // Split into lines; leftmost may be incomplete — save as new carry
+        const lines = combined.split('\n')
+        carry = lines.shift() // leftmost (potentially partial) line
+
+        // Process lines right-to-left (newest first within the chunk)
+        for (let i = lines.length - 1; i >= 0 && results.length < n; i--) {
+          const line = lines[i].trim()
+          if (!line) continue
+          let record
+          try { record = JSON.parse(line) } catch { continue }
+          if (!record || typeof record.id !== 'string') continue
+          results.push(record)
+        }
+      }
+
+      // Process any remaining carry (the very first line of the file)
+      if (results.length < n && carry.trim()) {
+        let record
+        try { record = JSON.parse(carry.trim()) } catch { record = null }
+        if (record && typeof record.id === 'string') {
+          results.push(record)
+        }
+      }
+    } catch {
+      // I/O error on this file — skip it, try next
+    } finally {
+      if (fd !== undefined) {
+        try { closeSync(fd) } catch {}
+      }
+    }
+  }
+
+  return results
+}
+
+// Return the single audit record whose `id` field equals the given 26-char
+// Crockford ULID, or null if no match is found.
+//
+// Parameters:
+//   config  {object}   — merged Sentinel config
+//   id      {string}   — 26-char Crockford ULID to locate
+//   paths   {string[]} — explicit list of file paths to scan.
+//                        When omitted, defaults to listAuditPaths(config).
+//
+// Returns: Parsed record object on match, or null.
+// Fail-open: missing files are skipped; malformed lines are skipped.
+export function findAuditEntryById({ config, id, paths } = {}) {
+  const filePaths = paths ?? listAuditPaths(config)
+
+  for (const filePath of filePaths) {
+    let raw
+    try { raw = readFileSync(filePath, 'utf8') } catch { continue }
+    const lines = raw.split('\n')
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      let record
+      try { record = JSON.parse(trimmed) } catch { continue }
+      if (record && record.id === id) return record
+    }
+  }
+
+  return null
+}
+
+const SUMMARY_EVENTS = new Set(['block', 'ask', 'scrub', 'warn'])
+
+// Return event-class counts for all records whose ts Date.parse >= sinceMs.
+//
+// Parameters:
+//   config   {object}   — merged Sentinel config
+//   sinceMs  {number}   — lower bound epoch ms (inclusive). Use Date.now() - 7*24*60*60*1000
+//                         for a 7-day window.
+//   paths    {string[]} — explicit list of file paths to scan.
+//                         When omitted, defaults to listAuditPaths(config).
+//
+// Returns: { block: number, ask: number, scrub: number, warn: number, total: number }
+// Fail-open: missing files and malformed lines are silently skipped.
+export function summariseByEventClass({ config, sinceMs = 0, paths } = {}) {
+  const counts = { block: 0, ask: 0, scrub: 0, warn: 0 }
+  const filePaths = paths ?? listAuditPaths(config)
+
+  for (const filePath of filePaths) {
+    let raw
+    try { raw = readFileSync(filePath, 'utf8') } catch { continue }
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      let record
+      try { record = JSON.parse(trimmed) } catch { continue }
+      if (!record || typeof record.ts !== 'string') continue
+      const ts = Date.parse(record.ts)
+      if (Number.isNaN(ts) || ts < sinceMs) continue
+      if (SUMMARY_EVENTS.has(record.event)) {
+        counts[record.event] = (counts[record.event] ?? 0) + 1
+      }
+    }
+  }
+
+  const total = counts.block + counts.ask + counts.scrub + counts.warn
+  return { ...counts, total }
 }

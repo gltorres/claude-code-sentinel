@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve, join } from 'node:path'
 import { tmpdir, homedir } from 'node:os'
@@ -716,4 +716,165 @@ test('SessionStart with one entry older than 7d does not count that entry', () =
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
+})
+
+// ─── Dry-run tests (Sprint 09, Spec 03) ──────────────────────────────────────
+
+function statOrNull(filePath) {
+  try { return statSync(filePath) } catch { return null }
+}
+
+// Test DR1: Bash deny case — cat .env → decision=deny, audit log unchanged.
+test('--dry-run PreToolUse Bash cat .env prints decision=deny and does not write audit', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-dryrun-'))
+  const auditPath = join(dataDir, 'audit.jsonl')
+  try {
+    const before = statOrNull(auditPath)
+    const input = JSON.stringify({
+      session_id: 'dr-test-1',
+      cwd: '/tmp/project',
+      tool_name: 'Bash',
+      tool_input: { command: 'cat .env' },
+    })
+    const r = spawnSync(process.execPath, [HOOK, 'PreToolUse', '--dry-run'], {
+      input,
+      encoding: 'utf8',
+      timeout: 5000,
+      env: { ...process.env, CLAUDE_PLUGIN_DATA: dataDir },
+    })
+    assert.equal(r.status, 0, `expected exit 0, got ${r.status}; stderr: ${r.stderr}`)
+    assert.ok(
+      r.stdout.startsWith('decision=deny'),
+      `expected stdout to start with "decision=deny", got: ${r.stdout.trim()}`,
+    )
+    assert.ok(
+      r.stdout.includes('rule='),
+      `stdout must include rule= field, got: ${r.stdout.trim()}`,
+    )
+    const after = statOrNull(auditPath)
+    assert.equal(
+      after?.size ?? 0,
+      before?.size ?? 0,
+      'audit file size must not change after --dry-run',
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// Test DR2: Bash allow case — wc -l README.md → decision=allow, audit log unchanged.
+test('--dry-run PreToolUse Bash wc -l README.md prints decision=allow and does not write audit', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-dryrun-'))
+  const auditPath = join(dataDir, 'audit.jsonl')
+  try {
+    const before = statOrNull(auditPath)
+    const input = JSON.stringify({
+      session_id: 'dr-test-2',
+      cwd: '/tmp/project',
+      tool_name: 'Bash',
+      tool_input: { command: 'wc -l README.md' },
+    })
+    const r = spawnSync(process.execPath, [HOOK, 'PreToolUse', '--dry-run'], {
+      input,
+      encoding: 'utf8',
+      timeout: 5000,
+      env: { ...process.env, CLAUDE_PLUGIN_DATA: dataDir },
+    })
+    assert.equal(r.status, 0, `expected exit 0, got ${r.status}; stderr: ${r.stderr}`)
+    assert.ok(
+      r.stdout.startsWith('decision=allow'),
+      `expected stdout to start with "decision=allow", got: ${r.stdout.trim()}`,
+    )
+    const after = statOrNull(auditPath)
+    assert.equal(
+      after?.size ?? 0,
+      before?.size ?? 0,
+      'audit file size must not change after --dry-run',
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// Test DR3: Read deny case — Read of ~/.aws/credentials → decision=deny, audit unchanged.
+test('--dry-run PreToolUse Read ~/.aws/credentials prints decision=deny and does not write audit', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-dryrun-'))
+  const auditPath = join(dataDir, 'audit.jsonl')
+  try {
+    const before = statOrNull(auditPath)
+    const input = JSON.stringify({
+      session_id: 'dr-test-3',
+      cwd: '/tmp/project',
+      tool_name: 'Read',
+      tool_input: { file_path: `${homedir()}/.aws/credentials` },
+    })
+    const r = spawnSync(process.execPath, [HOOK, 'PreToolUse', '--dry-run'], {
+      input,
+      encoding: 'utf8',
+      timeout: 5000,
+      env: { ...process.env, CLAUDE_PLUGIN_DATA: dataDir },
+    })
+    assert.equal(r.status, 0, `expected exit 0, got ${r.status}; stderr: ${r.stderr}`)
+    assert.ok(
+      r.stdout.startsWith('decision=deny'),
+      `expected stdout to start with "decision=deny", got: ${r.stdout.trim()}`,
+    )
+    const after = statOrNull(auditPath)
+    assert.equal(
+      after?.size ?? 0,
+      before?.size ?? 0,
+      'audit file size must not change after --dry-run',
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// Test DR4: Read allow case — Read of a regular project file → decision=allow, audit unchanged.
+test('--dry-run PreToolUse Read /tmp/project/README.md prints decision=allow and does not write audit', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-dryrun-'))
+  const auditPath = join(dataDir, 'audit.jsonl')
+  try {
+    const before = statOrNull(auditPath)
+    const input = JSON.stringify({
+      session_id: 'dr-test-4',
+      cwd: '/tmp/project',
+      tool_name: 'Read',
+      tool_input: { file_path: '/tmp/project/README.md' },
+    })
+    const r = spawnSync(process.execPath, [HOOK, 'PreToolUse', '--dry-run'], {
+      input,
+      encoding: 'utf8',
+      timeout: 5000,
+      env: { ...process.env, CLAUDE_PLUGIN_DATA: dataDir },
+    })
+    assert.equal(r.status, 0, `expected exit 0, got ${r.status}; stderr: ${r.stderr}`)
+    assert.ok(
+      r.stdout.startsWith('decision=allow'),
+      `expected stdout to start with "decision=allow", got: ${r.stdout.trim()}`,
+    )
+    const after = statOrNull(auditPath)
+    assert.equal(
+      after?.size ?? 0,
+      before?.size ?? 0,
+      'audit file size must not change after --dry-run',
+    )
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// Test DR5: Non-PreToolUse event with --dry-run → exit 1 with documented stderr.
+test('--dry-run with PostToolUse event exits 1 with documented stderr message', () => {
+  const r = spawnSync(process.execPath, [HOOK, 'PostToolUse', '--dry-run'], {
+    input: '{}',
+    encoding: 'utf8',
+    timeout: 5000,
+    env: { ...process.env },
+  })
+  assert.equal(r.status, 1, `expected exit 1, got ${r.status}`)
+  assert.ok(
+    r.stderr.includes('dry-run only supports PreToolUse today'),
+    `expected documented error in stderr, got: ${r.stderr.trim()}`,
+  )
 })
