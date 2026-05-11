@@ -116,7 +116,7 @@ switch (which) {
     // Extract the path under test for the five protected tool types.
     let filePath = null
     if (tool === 'Read' || tool === 'Edit' || tool === 'Grep') {
-      filePath = event.tool_input?.file_path ?? null
+      filePath = event.tool_input?.file_path ?? event.tool_input?.path ?? null
     } else if (tool === 'NotebookEdit') {
       filePath = event.tool_input?.notebook_path ?? event.tool_input?.file_path ?? null
     } else if (tool === 'Glob') {

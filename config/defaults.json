@@ -6,6 +6,7 @@
       "**/.envrc",
       "**/credentials*.json",
       "**/secrets*.y?ml",
+      "**/secrets*.yml",
       "**/.bashrc",
       "**/.zshrc",
       "**/.profile",
