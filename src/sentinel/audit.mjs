@@ -28,8 +28,13 @@ function resolveAuditPath(config) {
 export function summariseInput(hookEvent, tool, eventJson) {
   if (tool === 'Read' || tool === 'Edit' || tool === 'Grep' || tool === 'Glob') {
     return {
-      path: eventJson.tool_input?.file_path ?? eventJson.tool_input?.path ?? null,
+      path: eventJson.tool_input?.file_path ?? eventJson.tool_input?.notebook_path ?? eventJson.tool_input?.path ?? null,
       glob: eventJson.tool_input?.pattern ?? null,
+    }
+  }
+  if (tool === 'NotebookEdit') {
+    return {
+      path: eventJson.tool_input?.notebook_path ?? eventJson.tool_input?.file_path ?? null,
     }
   }
   if (tool === 'Bash') {
@@ -55,7 +60,12 @@ export function summariseInput(hookEvent, tool, eventJson) {
 // Rotates to <path>.1 (overwriting prior rotation) when the pre-append size
 // exceeds config.audit.maxSizeMb * 1024 * 1024.
 // Any error at any step is silently swallowed — the hook must not crash.
-export function writeAuditLine(config, hookEvent, eventJson) {
+export function writeAuditLine(
+  config,
+  hookEvent,
+  eventJson,
+  decision = { event: 'warn', decision: 'allow', rule: null, matched: null },
+) {
   try {
     const path = resolveAuditPath(config)
     const maxSizeMb = config?.audit?.maxSizeMb ?? 10
@@ -65,13 +75,13 @@ export function writeAuditLine(config, hookEvent, eventJson) {
       ts: new Date().toISOString(),
       session_id: eventJson.session_id ?? '',
       cwd: eventJson.cwd ?? process.cwd(),
-      event: 'warn',
+      event: decision.event ?? 'warn',
       hook: hookEvent,
       tool,
-      rule: null,
-      matched: null,
+      rule: decision.rule ?? null,
+      matched: decision.matched ?? null,
       input_summary: summariseInput(hookEvent, tool, eventJson),
-      decision: 'allow',
+      decision: decision.decision ?? 'allow',
       metadata: {},
     }
 

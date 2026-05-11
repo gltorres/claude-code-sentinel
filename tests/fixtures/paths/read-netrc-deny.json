@@ -1,0 +1,16 @@
+{
+  "event": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "test-session-fixture-paths-10",
+    "cwd": "/home/testuser/myproject",
+    "tool_name": "Read",
+    "tool_input": {
+      "file_path": "/home/testuser/.netrc"
+    }
+  },
+  "expect": {
+    "decision": "deny",
+    "rule": "paths.deny",
+    "matched": "**/.netrc"
+  }
+}

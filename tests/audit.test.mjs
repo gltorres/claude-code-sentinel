@@ -116,3 +116,47 @@ test('second rotation overwrites audit.jsonl.1 without creating .2', () => {
   assert.ok(existsSync(auditPath + '.1'), 'audit.jsonl.1 should still exist after second rotation')
   assert.ok(!existsSync(auditPath + '.2'), 'audit.jsonl.2 must NOT exist — single-level rotation only')
 })
+
+// (g) Passing a deny decision context writes event:'block', decision:'deny',
+// rule, and matched verbatim into the audit record.
+test('audit deny line carries block/deny fields', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'sentinel-audit-'))
+  const config = makeTempConfig(tmp)
+  const denyCtx = { event: 'block', decision: 'deny', rule: 'paths.deny', matched: '**/.env' }
+  writeAuditLine(
+    config,
+    'PreToolUse',
+    { tool_name: 'Read', tool_input: { file_path: '/project/.env' } },
+    denyCtx,
+  )
+  const raw = readFileSync(join(tmp, 'audit.jsonl'), 'utf8').trim()
+  const parsed = JSON.parse(raw.split('\n')[0])
+  assert.equal(parsed.event, 'block')
+  assert.equal(parsed.decision, 'deny')
+  assert.equal(parsed.rule, 'paths.deny')
+  assert.equal(parsed.matched, '**/.env')
+})
+
+// (h) summariseInput with tool === 'NotebookEdit' returns the notebook path.
+test('summariseInput returns notebook path for NotebookEdit tool', () => {
+  const summary = summariseInput(
+    'PreToolUse',
+    'NotebookEdit',
+    { tool_input: { notebook_path: '/project/analysis.ipynb' } },
+  )
+  assert.deepEqual(summary, { path: '/project/analysis.ipynb' })
+})
+
+// (i) Calling writeAuditLine without a decision argument keeps the Sprint 02
+// defaults: event:'warn' and decision:'allow'.
+test('writeAuditLine without decision arg keeps warn/allow defaults', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'sentinel-audit-'))
+  const config = makeTempConfig(tmp)
+  writeAuditLine(config, 'PreToolUse', { tool_name: 'Read', tool_input: { file_path: '/ok.txt' } })
+  const raw = readFileSync(join(tmp, 'audit.jsonl'), 'utf8').trim()
+  const parsed = JSON.parse(raw.split('\n')[0])
+  assert.equal(parsed.event, 'warn')
+  assert.equal(parsed.decision, 'allow')
+  assert.equal(parsed.rule, null)
+  assert.equal(parsed.matched, null)
+})

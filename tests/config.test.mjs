@@ -125,3 +125,16 @@ test('missing user and project files are silent no-ops', () => {
     rmSync(cwd, { recursive: true, force: true })
   }
 })
+
+test('defaults include populated paths.deny list', () => {
+  const home = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  const cwd = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  try {
+    const config = loadConfig({ home, cwd })
+    assert.ok(Array.isArray(config.paths.deny), 'paths.deny must be an array')
+    assert.ok(config.paths.deny.length > 0, 'paths.deny must have at least one entry')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
