@@ -27,9 +27,9 @@ function envelope(eventName, extra = {}) {
   return { hookSpecificOutput: { hookEventName: eventName, ...extra } }
 }
 
-function emit(obj) {
+function emit(obj, decisionCtx = undefined) {
   // Write one audit line per hook decision; fail-open so audit never breaks the envelope
-  try { writeAuditLine(config, which, event) } catch {}
+  try { writeAuditLine(config, which, event, decisionCtx) } catch {}
   process.stdout.write(JSON.stringify(obj) + '\n')
   process.exit(0)
 }
