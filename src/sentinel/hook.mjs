@@ -2,6 +2,8 @@
 // Sentinel — single ESM hook entry. Static imports only.
 import { readFileSync } from 'node:fs'
 import process from 'node:process'
+import { loadConfig } from './config.mjs'
+import { writeAuditLine } from './audit.mjs'
 
 const EVENT_NAMES = ['PreToolUse', 'PostToolUse', 'SessionStart', 'SessionEnd']
 const MIN_NODE = '20.10.0'
@@ -26,6 +28,8 @@ function envelope(eventName, extra = {}) {
 }
 
 function emit(obj) {
+  // Write one audit line per hook decision; fail-open so audit never breaks the envelope
+  try { writeAuditLine(config, which, event) } catch {}
   process.stdout.write(JSON.stringify(obj) + '\n')
   process.exit(0)
 }
@@ -56,9 +60,8 @@ if (raw.trim().length > 0) {
   try { event = JSON.parse(raw) } catch { event = {} }
 }
 
-// Suppress unused-variable warning for `event` in Sprint 01 no-op.
-// Sprints 02–06 will consume event fields (tool name, args, output, etc.).
-void event
+// Sprint 02: load merged config (shipped defaults + user + project overlays)
+const config = loadConfig()
 
 const which = process.argv[2]
 
