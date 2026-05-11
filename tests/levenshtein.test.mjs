@@ -33,10 +33,10 @@ test('levenshtein: lodash/lodahs — last two chars swapped is distance 2', () =
   assert.equal(levenshtein('lodash', 'lodahs'), 2)
 })
 
-test('levenshtein: single char substitution at end returns 1', () => {
-  // reqeusts vs requests — one transposition produces distance 1
-  // e and u are swapped in "reqeusts" relative to "requests"
-  assert.equal(levenshtein('reqeusts', 'requests'), 1)
+test('levenshtein: transposition of adjacent chars returns 2 (not DL distance)', () => {
+  // reqeusts vs requests: positions 3–4 are 'e','u' vs 'u','e' — a transposition.
+  // Standard Levenshtein (not Damerau-Levenshtein) costs 2 for any swap.
+  assert.equal(levenshtein('reqeusts', 'requests'), 2)
 })
 
 // ── levenshtein: transposition (two adjacent chars swapped) ──────────────────
@@ -60,10 +60,10 @@ test('levenshtein: insertion — one char added in the middle', () => {
 
 // ── nearestPopular: acceptance-criteria examples ──────────────────────────────
 
-test('nearestPopular: reqeusts → requests with distance 1 (from research spec)', () => {
+test('nearestPopular: reqeusts → requests is nearest with distance 2 (standard Levenshtein)', () => {
   const result = nearestPopular('reqeusts', ['requests', 'flask'])
   assert.equal(result.name, 'requests')
-  assert.equal(result.distance, 1)
+  assert.equal(result.distance, 2)
 })
 
 test('nearestPopular: exact match in list returns distance 0', () => {
