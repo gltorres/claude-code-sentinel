@@ -24,16 +24,22 @@ function stubFetch404() {
 
 // Stub fetchFn that returns a clean 200 response for a widely-used package.
 function stubFetchClean({ ageDays = 200, weeklyDownloads = 50000, hasHomepage = true, hasRepository = true } = {}) {
-  return async (_url, _opts) => ({
-    ok: true,
-    status: 200,
-    json: async () => ({
-      time: { created: new Date(Date.now() - ageDays * 86400_000).toISOString() },
-      'dist-tags': { latest: '1.0.0' },
-      versions: { '1.0.0': { homepage: hasHomepage ? 'https://example.com' : undefined, repository: hasRepository ? { url: 'https://github.com/example/pkg' } : undefined } },
-      downloads: { weekly: weeklyDownloads },
-    }),
-  })
+  return async (url, _opts) => {
+    if (url.includes('api.npmjs.org/downloads')) {
+      return { ok: true, status: 200, json: async () => ({ downloads: weeklyDownloads }) }
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        time: { created: new Date(Date.now() - ageDays * 86_400_000).toISOString() },
+        homepage: hasHomepage ? 'https://example.com' : null,
+        repository: hasRepository ? { url: 'https://github.com/example/pkg' } : null,
+        'dist-tags': { latest: '1.0.0' },
+        versions: { '1.0.0': {} },
+      }),
+    }
+  }
 }
 
 // Stub fetchFn that throws a network error.
@@ -44,7 +50,14 @@ function stubFetchNetworkError() {
 const BASE_OPTS = {
   cwd: '/tmp/project',
   home: '/tmp/home',
-  config: {},
+  config: {
+    paths: {
+      deny: ['**/.env', '**/.env.*'],
+    },
+    bash: {
+      denyCommands: ['cat'],
+    },
+  },
   now: Date.now(),
   cache: {},
   envelope,

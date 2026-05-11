@@ -3,6 +3,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 import { loadConfig } from './config.mjs'
 import { writeAuditLine } from './audit.mjs'
 import { matchPath } from './paths.mjs'
@@ -272,6 +273,7 @@ const config = loadConfig({ cwd: event.cwd })
 
 const which = process.argv[2]
 
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
 await (async () => {
   switch (which) {
     case 'PreToolUse': {
@@ -319,12 +321,33 @@ await (async () => {
         const command = (event.tool_input && event.tool_input.command) || ''
         const cachePath = resolveCachePath(process.env)
         const cache = loadCache(cachePath)
+        // Wire SENTINEL_TEST_FETCH_FIXTURES for hermetic E2E tests: load the fixture map
+        // and replace globalThis.fetch with a stub that matches by URL prefix.
+        let fetchFn = globalThis.fetch
+        const fixtureFile = process.env.SENTINEL_TEST_FETCH_FIXTURES
+        if (fixtureFile) {
+          let stubMap
+          try { stubMap = JSON.parse(readFileSync(fixtureFile, 'utf8')) } catch { stubMap = {} }
+          fetchFn = async (url) => {
+            let entry
+            for (const prefix of Object.keys(stubMap)) {
+              if (url.startsWith(prefix)) { entry = stubMap[prefix]; break }
+            }
+            if (!entry) return { ok: false, status: 500, async json() { return {} } }
+            if (entry.throw) throw new Error('stub network error')
+            return {
+              ok: entry.status >= 200 && entry.status < 300,
+              status: entry.status,
+              async json() { return entry.body ?? {} },
+            }
+          }
+        }
         await runBashBranch({
           command,
           cwd,
           home: homedir(),
           config,
-          fetchFn: globalThis.fetch,
+          fetchFn,
           now: Date.now(),
           cache,
           emit,
@@ -359,3 +382,4 @@ await (async () => {
       }))
   }
 })()
+}

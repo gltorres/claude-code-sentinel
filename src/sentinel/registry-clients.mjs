@@ -62,13 +62,20 @@ async function fetchPyPI(name, fetchFn, timeoutMs) {
 
     const info = pkg.info || {}
 
-    // Earliest release upload time across all releases
+    // Earliest release upload time — prefer pkg.releases (full history), fall back to pkg.urls
     let ageDays = 0
     const releases = pkg.releases || {}
     let earliest = null
     for (const files of Object.values(releases)) {
       if (!Array.isArray(files)) continue
       for (const f of files) {
+        if (f.upload_time_iso_8601 && (!earliest || f.upload_time_iso_8601 < earliest)) {
+          earliest = f.upload_time_iso_8601
+        }
+      }
+    }
+    if (!earliest && Array.isArray(pkg.urls)) {
+      for (const f of pkg.urls) {
         if (f.upload_time_iso_8601 && (!earliest || f.upload_time_iso_8601 < earliest)) {
           earliest = f.upload_time_iso_8601
         }
