@@ -1,4 +1,4 @@
-.PHONY: validate test demo refresh-data
+.PHONY: validate test demo clean-demo refresh-data
 
 validate:
 	@for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/sentinel.json src/sentinel/data/*.json; do \
@@ -12,7 +12,14 @@ test:
 	@node --test tests/*.mjs
 
 demo:
-	@echo "demo not yet implemented (Sprint 10)"
+	@mkdir -p demo
+	@rm -f demo/audit.jsonl demo/transcript.md
+	@CLAUDE_PLUGIN_DATA=$(CURDIR)/demo/ node tools/demo.mjs --write-transcript=demo/transcript.md
+	@echo "demo: ok — transcript written to demo/transcript.md"
+
+clean-demo:
+	@rm -f demo/audit.jsonl demo/transcript.md
+	@echo "clean-demo: ok"
 
 refresh-data:
 	@node tools/refresh_top_packages.mjs
