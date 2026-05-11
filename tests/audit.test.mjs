@@ -3,7 +3,7 @@
 // size-cap rotation, and single-level rotation overwrite.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, writeFileSync, statSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, statSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -11,6 +11,15 @@ import { dirname, resolve } from 'node:path'
 import { writeAuditLine, summariseInput, tailAuditEntries, findAuditEntryById, summariseByEventClass } from '../src/sentinel/audit.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+
+// Module-scope SENTINEL_HOME redirect: every writeAuditLine in this test file
+// now persists a pointer file. Without this default redirect, the pointer
+// would land in the developer's real ~/.claude/sentinel/.audit-path on every
+// test run. Individual tests that need a different override set/restore it
+// inline; the module default keeps tests fail-safe.
+if (!process.env.SENTINEL_HOME) {
+  process.env.SENTINEL_HOME = mkdtempSync(join(tmpdir(), 'sentinel-test-home-'))
+}
 
 const EXPECTED_KEYS = [
   'id', 'ts', 'session_id', 'cwd', 'event', 'hook',
@@ -329,4 +338,108 @@ test('summariseByEventClass counts only records within the sinceMs window', () =
   assert.equal(result.scrub, 0)
   assert.equal(result.warn, 0)
   assert.equal(result.total, 1, 'total should be 1')
+})
+
+// ── audit pointer file: cross-env writer/reader divergence ────────────────────
+
+// Helper: redirect homedir() resolution for the in-process audit module by
+// setting SENTINEL_HOME, which audit.mjs's auditPointerPath() honours. Returns
+// a cleanup function that restores both SENTINEL_HOME and CLAUDE_PLUGIN_DATA.
+function withEnv(overrides) {
+  const prior = {}
+  for (const key of Object.keys(overrides)) {
+    prior[key] = process.env[key]
+    if (overrides[key] === undefined) delete process.env[key]
+    else process.env[key] = overrides[key]
+  }
+  return () => {
+    for (const key of Object.keys(prior)) {
+      if (prior[key] === undefined) delete process.env[key]
+      else process.env[key] = prior[key]
+    }
+  }
+}
+
+// Reproduces the live-plugin/CLI env split: hook writes with
+// CLAUDE_PLUGIN_DATA set, /sentinel-review reads without it. Before the fix
+// the deny line was invisible to the reader. After the fix the pointer file
+// at <home>/.claude/sentinel/.audit-path lets the reader discover the
+// writer's path.
+test('audit pointer file unlocks cross-env readability', () => {
+  const dirA = mkdtempSync(join(tmpdir(), 'sentinel-writerA-'))
+  const homeOverride = mkdtempSync(join(tmpdir(), 'sentinel-home-'))
+  const sentinelDir = join(homeOverride, '.claude', 'sentinel')
+  mkdirSync(sentinelDir, { recursive: true })
+
+  // Writer env: CLAUDE_PLUGIN_DATA=dirA, SENTINEL_HOME=homeOverride so the
+  // pointer lands under the test-owned home, not the developer's real home.
+  const restore = withEnv({
+    CLAUDE_PLUGIN_DATA: dirA,
+    SENTINEL_HOME: homeOverride,
+  })
+
+  try {
+    // Empty config — writer falls through to the CLAUDE_PLUGIN_DATA branch.
+    writeAuditLine(
+      {},
+      'PreToolUse',
+      { tool_name: 'Read', tool_input: { file_path: '/x/.env' } },
+      { event: 'block', decision: 'deny', rule: 'paths.deny', matched: '**/.env' },
+    )
+
+    // Pointer file exists and points at dirA/audit.jsonl.
+    const pointerPath = join(sentinelDir, '.audit-path')
+    assert.ok(existsSync(pointerPath), 'pointer file must exist after writeAuditLine')
+    assert.equal(
+      readFileSync(pointerPath, 'utf8').trim(),
+      join(dirA, 'audit.jsonl'),
+      'pointer must contain the resolved audit path',
+    )
+
+    // Reader env: clear CLAUDE_PLUGIN_DATA but keep SENTINEL_HOME so the
+    // reader's listAuditPaths consults the same pointer file.
+    delete process.env.CLAUDE_PLUGIN_DATA
+    const records = tailAuditEntries({ config: {}, n: 5 })
+    assert.equal(records.length, 1, 'reader must discover the deny record via pointer')
+    assert.equal(records[0].event, 'block')
+    assert.equal(records[0].decision, 'deny')
+    assert.equal(records[0].matched, '**/.env')
+  } finally {
+    restore()
+    rmSync(dirA, { recursive: true, force: true })
+    rmSync(homeOverride, { recursive: true, force: true })
+  }
+})
+
+// Stale-pointer hygiene: if the pointer points at a path that no longer
+// exists, tailAuditEntries returns an empty result rather than throwing.
+test('audit pointer pointing at a missing path is filtered cleanly', () => {
+  const staleDir = mkdtempSync(join(tmpdir(), 'sentinel-stale-'))
+  const homeOverride = mkdtempSync(join(tmpdir(), 'sentinel-home-stale-'))
+  const sentinelDir = join(homeOverride, '.claude', 'sentinel')
+  mkdirSync(sentinelDir, { recursive: true })
+
+  // Write a pointer that references a path under staleDir, then nuke staleDir
+  // so the referenced audit file no longer exists.
+  const pointerPath = join(sentinelDir, '.audit-path')
+  const stalePath = join(staleDir, 'audit.jsonl')
+  writeFileSync(pointerPath, stalePath + '\n')
+  rmSync(staleDir, { recursive: true, force: true })
+
+  const restore = withEnv({
+    CLAUDE_PLUGIN_DATA: undefined,
+    SENTINEL_HOME: homeOverride,
+  })
+
+  try {
+    // No throws; empty result because no candidate path exists. The fallback
+    // primary (homeOverride/.claude/sentinel/audit.jsonl) also doesn't exist,
+    // so the merged result is empty — exactly the desired fail-open behaviour.
+    const records = tailAuditEntries({ config: {}, n: 5 })
+    assert.ok(Array.isArray(records), 'tailAuditEntries must return an array')
+    assert.equal(records.length, 0, 'stale pointer must produce zero records, not throw')
+  } finally {
+    restore()
+    rmSync(homeOverride, { recursive: true, force: true })
+  }
 })

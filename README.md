@@ -100,7 +100,7 @@ Every block, ask, scrub, and warn is appended to `~/.claude/sentinel/audit.jsonl
 /sentinel-review config      # effective config with per-key source attribution
 ```
 
-**Audit-log path resolution.** Sentinel resolves the audit log path in this order: (1) explicit `config.audit.path`, (2) `$CLAUDE_PLUGIN_DATA/audit.jsonl` (set automatically by Claude Code when invoking plugin hooks), (3) fallback `~/.claude/sentinel/audit.jsonl`. Live audit lines from a running Claude Code session will typically land at path (2); `make demo` and offline runs land at path (3). Use `/sentinel-review` rather than reading the JSONL directly — the CLI follows the same priority order and always reads from the same file the hook is writing to.
+**Audit-log path resolution.** Sentinel resolves the audit log path in this order: (1) explicit `config.audit.path`, (2) `$CLAUDE_PLUGIN_DATA/audit.jsonl` (set automatically by Claude Code when invoking plugin hooks), (3) fallback `~/.claude/sentinel/audit.jsonl`. The hook writer picks one of these per-invocation based on the env it runs under. To keep `/sentinel-review` accurate when the writer and reader run under different environments (the live plugin hook has `$CLAUDE_PLUGIN_DATA` set; the Bash-tool child running the CLI does not), the writer also persists its resolved path to a sidecar pointer at `~/.claude/sentinel/.audit-path`. The CLI reads the pointer and includes the discovered path in its scan; stale pointers (left by tests that cleaned up their temp dirs) are filtered out by an `existsSync` gate. Use `/sentinel-review` rather than reading the JSONL directly — the CLI discovers and merges across all live and historical audit files.
 
 For a full forensic report on a flagged entry, invoke the investigator subagent:
 

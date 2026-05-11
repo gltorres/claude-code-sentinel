@@ -1,10 +1,44 @@
 // Sentinel audit writer — Sprint 02, Spec 3.
 // Appends one JSONL line per hook event to a size-capped rotating log file.
 // Never throws — all I/O errors are silently swallowed (fail-open contract).
-import { statSync, renameSync, mkdirSync, appendFileSync, openSync, readSync, closeSync, readFileSync, existsSync } from 'node:fs'
+import { statSync, renameSync, mkdirSync, appendFileSync, openSync, readSync, closeSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { ulid } from './ulid.mjs'
+
+// Sidecar pointer file at the fallback root that records the most-recent
+// resolved audit path. Readers in a different env (no CLAUDE_PLUGIN_DATA,
+// e.g. the /sentinel-review CLI launched via the Bash tool) consult this
+// file to discover where the hook is currently writing. The pointer lives
+// at a stable, env-independent location so it is always reachable.
+//
+// SENTINEL_HOME mirrors the override that loadConfigWithSources / review-cli
+// honour; tests use it to redirect homedir() without monkey-patching.
+function auditPointerPath() {
+  const home = process.env.SENTINEL_HOME || homedir()
+  return join(home, '.claude', 'sentinel', '.audit-path')
+}
+
+const AUDIT_POINTER_PATH = auditPointerPath()
+
+function persistAuditPointer(resolvedPath) {
+  try {
+    const pointerPath = auditPointerPath()
+    // Idempotence: skip the write if the pointer already matches the
+    // resolved path. Keeps the hot path to a single readFileSync call
+    // (a few bytes) on the common case where the path is stable.
+    try {
+      if (readFileSync(pointerPath, 'utf8').trim() === resolvedPath) return
+    } catch {}
+    const dir = dirname(pointerPath)
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    writeFileSync(pointerPath, resolvedPath + '\n')
+  } catch {
+    // Fail-open: a pointer-write failure must never break the primary
+    // audit-write path. Worst case the reader falls back to its own
+    // resolveAuditPath result, which is the pre-fix behaviour.
+  }
+}
 
 // Resolve the absolute audit file path from config, env, or fallback.
 // Priority: config.audit.path > CLAUDE_PLUGIN_DATA env var > ~/.claude/sentinel/audit.jsonl
@@ -19,8 +53,12 @@ export function resolveAuditPath(config) {
   if (process.env.CLAUDE_PLUGIN_DATA) {
     return join(process.env.CLAUDE_PLUGIN_DATA, 'audit.jsonl')
   }
-  // PRD §10 fallback path — used in dev / offline runs
-  return join(homedir(), '.claude', 'sentinel', 'audit.jsonl')
+  // PRD §10 fallback path — used in dev / offline runs.
+  // Honour SENTINEL_HOME so tests (and any caller that redirects home for
+  // process isolation) keep their writes inside their own territory; this
+  // mirrors the SENTINEL_HOME contract loadConfigWithSources / review-cli use.
+  const home = process.env.SENTINEL_HOME || homedir()
+  return join(home, '.claude', 'sentinel', 'audit.jsonl')
 }
 
 // Build a tool-specific input summary that never echoes raw tool_input or tool_response.
@@ -68,6 +106,7 @@ export function writeAuditLine(
 ) {
   try {
     const path = resolveAuditPath(config)
+    persistAuditPointer(path)
     const maxSizeMb = config?.audit?.maxSizeMb ?? 10
     const tool = eventJson.tool_name ?? null
     const record = {
@@ -106,7 +145,21 @@ export function writeAuditLine(
 // helper is only invoked when `paths` is undefined.
 function listAuditPaths(config) {
   const primary = resolveAuditPath(config)
-  return [primary, primary + '.1'].filter(existsSync)
+  const candidates = new Set([primary, primary + '.1'])
+
+  // Discover the writer's actual path via the sidecar pointer when our
+  // env differs from the writer's env (e.g. CLI launched via the Bash
+  // tool has no CLAUDE_PLUGIN_DATA). Stale pointers are filtered out by
+  // the existsSync gate below, so there is no failure mode to clean up.
+  try {
+    const pointer = readFileSync(auditPointerPath(), 'utf8').trim()
+    if (pointer && pointer !== primary) {
+      candidates.add(pointer)
+      candidates.add(pointer + '.1')
+    }
+  } catch {}
+
+  return [...candidates].filter(existsSync)
 }
 
 const TAIL_CHUNK_SIZE = 8 * 1024 // 8 KiB, same as session.mjs
@@ -126,14 +179,18 @@ const TAIL_CHUNK_SIZE = 8 * 1024 // 8 KiB, same as session.mjs
 // Fail-open: errors from individual files are silently skipped.
 export function tailAuditEntries({ config, n = 20, paths } = {}) {
   const filePaths = paths ?? listAuditPaths(config)
-  const results = []
+  // Each file is reverse-scanned and capped at n records. After all files
+  // are processed we merge globally by `record.ts` descending so multi-file
+  // listings (primary + rotated + pointer-discovered) interleave correctly
+  // in time order — string compare on ISO-8601 with `Z` suffix is correct.
+  const perFile = []
 
   for (const filePath of filePaths) {
-    if (results.length >= n) break
+    const fileResults = []
 
     let size
-    try { size = statSync(filePath).size } catch { continue }
-    if (size === 0) continue
+    try { size = statSync(filePath).size } catch { perFile.push(fileResults); continue }
+    if (size === 0) { perFile.push(fileResults); continue }
 
     let fd
     try {
@@ -144,7 +201,7 @@ export function tailAuditEntries({ config, n = 20, paths } = {}) {
       // previous (more-rightward) chunk — same pattern as session.mjs:39
       let carry = ''
 
-      while (remaining > 0 && results.length < n) {
+      while (remaining > 0 && fileResults.length < n) {
         const readSize = Math.min(TAIL_CHUNK_SIZE, remaining)
         const offset = remaining - readSize
         const bytesRead = readSync(fd, buf, 0, readSize, offset)
@@ -159,22 +216,22 @@ export function tailAuditEntries({ config, n = 20, paths } = {}) {
         carry = lines.shift() // leftmost (potentially partial) line
 
         // Process lines right-to-left (newest first within the chunk)
-        for (let i = lines.length - 1; i >= 0 && results.length < n; i--) {
+        for (let i = lines.length - 1; i >= 0 && fileResults.length < n; i--) {
           const line = lines[i].trim()
           if (!line) continue
           let record
           try { record = JSON.parse(line) } catch { continue }
           if (!record || typeof record.id !== 'string') continue
-          results.push(record)
+          fileResults.push(record)
         }
       }
 
       // Process any remaining carry (the very first line of the file)
-      if (results.length < n && carry.trim()) {
+      if (fileResults.length < n && carry.trim()) {
         let record
         try { record = JSON.parse(carry.trim()) } catch { record = null }
         if (record && typeof record.id === 'string') {
-          results.push(record)
+          fileResults.push(record)
         }
       }
     } catch {
@@ -184,9 +241,18 @@ export function tailAuditEntries({ config, n = 20, paths } = {}) {
         try { closeSync(fd) } catch {}
       }
     }
+
+    perFile.push(fileResults)
   }
 
-  return results
+  // Global merge: sort by ts descending (newest first). Records lacking a
+  // string ts sort last to preserve fail-open behaviour.
+  const merged = perFile.flat().sort((a, b) => {
+    const ta = typeof a.ts === 'string' ? a.ts : ''
+    const tb = typeof b.ts === 'string' ? b.ts : ''
+    return ta < tb ? 1 : ta > tb ? -1 : 0
+  })
+  return merged.slice(0, n)
 }
 
 // Return the single audit record whose `id` field equals the given 26-char

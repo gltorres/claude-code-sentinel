@@ -12,13 +12,21 @@ const HOOK = resolve(__dirname, '..', 'src', 'sentinel', 'hook.mjs')
 function runHook(args, input = '{}') {
   // Isolate every hook invocation to a temp CLAUDE_PLUGIN_DATA dir so
   // tests never write to the fallback ~/.claude/sentinel/audit.jsonl path.
+  // Redirect HOME / SENTINEL_HOME to the same temp dir so the writer's
+  // sidecar pointer file at ~/.claude/sentinel/.audit-path lands inside the
+  // test's exclusive territory rather than the developer's real home.
   const dataDir = mkdtempSync(join(tmpdir(), 'sentinel-runhook-'))
   try {
     return spawnSync(process.execPath, [HOOK, ...args], {
       input,
       encoding: 'utf8',
       timeout: 5000,
-      env: { ...process.env, CLAUDE_PLUGIN_DATA: dataDir },
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_DATA: dataDir,
+        HOME: dataDir,
+        SENTINEL_HOME: dataDir,
+      },
     })
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -26,11 +34,19 @@ function runHook(args, input = '{}') {
 }
 
 function runHookEnv(args, input = '{}', env = {}) {
+  // Redirect HOME / SENTINEL_HOME to the CLAUDE_PLUGIN_DATA dir by default so
+  // the writer's pointer file does not pollute the developer's real home.
+  // Callers that pass an explicit HOME / SENTINEL_HOME override these.
+  const defaults = {}
+  if (env.CLAUDE_PLUGIN_DATA) {
+    defaults.HOME = env.CLAUDE_PLUGIN_DATA
+    defaults.SENTINEL_HOME = env.CLAUDE_PLUGIN_DATA
+  }
   return spawnSync(process.execPath, [HOOK, ...args], {
     input,
     encoding: 'utf8',
     timeout: 5000,
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...defaults, ...env },
   })
 }
 
@@ -946,4 +962,85 @@ test('test suite never writes to the fallback ~/.claude/sentinel/audit.jsonl', (
     before ?? 0,
     `test wrote ${(after ?? 0) - (before ?? 0)} bytes to fallback audit path ${fallback}`,
   )
+})
+
+// ─── End-to-end pointer-file discovery: writer/reader env divergence ─────────
+// Reproduces the exact live-plugin/CLI scenario: hook subprocess writes with
+// CLAUDE_PLUGIN_DATA set; CLI subprocess reads without it. The pointer file
+// at $HOME/.claude/sentinel/.audit-path lets the CLI discover the writer's
+// real path. Before the fix the CLI returned no deny rows.
+test('review-cli discovers deny line written by hook to CLAUDE_PLUGIN_DATA via pointer', () => {
+  const REVIEW_CLI = resolve(__dirname, '..', 'src', 'sentinel', 'review-cli.mjs')
+  const dirA = mkdtempSync(join(tmpdir(), 'sentinel-e2e-data-'))
+  const homeDir = mkdtempSync(join(tmpdir(), 'sentinel-e2e-home-'))
+  try {
+    // 1. Writer: hook PreToolUse with deny-shaped Read event.
+    const denyEvent = JSON.stringify({
+      session_id: 'e2e-pointer-sess',
+      cwd: '/tmp/project',
+      tool_name: 'Read',
+      tool_input: { file_path: '/tmp/project/.env' },
+    })
+    const hookResult = spawnSync(process.execPath, [HOOK, 'PreToolUse'], {
+      input: denyEvent,
+      encoding: 'utf8',
+      timeout: 5000,
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_DATA: dirA,
+        HOME: homeDir,
+        SENTINEL_HOME: homeDir,
+      },
+    })
+    assert.equal(hookResult.status, 0, `hook exited ${hookResult.status}; stderr: ${hookResult.stderr}`)
+    const hookOut = JSON.parse(hookResult.stdout.trim())
+    assert.equal(hookOut.hookSpecificOutput.permissionDecision, 'deny')
+
+    // 2. Writer wrote audit line to dirA.
+    const auditPath = join(dirA, 'audit.jsonl')
+    const auditLines = readFileSync(auditPath, 'utf8').trim().split('\n').filter(Boolean)
+    assert.equal(auditLines.length, 1, 'writer must write exactly one audit line')
+    const auditRec = JSON.parse(auditLines[0])
+    assert.equal(auditRec.event, 'block')
+    assert.equal(auditRec.decision, 'deny')
+
+    // 3. Pointer file lands under homeDir/.claude/sentinel/.audit-path and
+    //    references the writer's audit.jsonl.
+    const pointerPath = join(homeDir, '.claude', 'sentinel', '.audit-path')
+    assert.ok(
+      statSync(pointerPath).size > 0,
+      `pointer file ${pointerPath} must exist and be non-empty`,
+    )
+    assert.equal(
+      readFileSync(pointerPath, 'utf8').trim(),
+      auditPath,
+      'pointer must contain the writer-resolved audit path',
+    )
+
+    // 4. Reader: spawn review-cli without CLAUDE_PLUGIN_DATA but with
+    //    SENTINEL_HOME pointing at homeDir so it consults the same pointer.
+    const cliEnv = { ...process.env, HOME: homeDir, SENTINEL_HOME: homeDir, SENTINEL_CWD: homeDir }
+    delete cliEnv.CLAUDE_PLUGIN_DATA
+    const cliResult = spawnSync(process.execPath, [REVIEW_CLI, 'recent', '5'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      env: cliEnv,
+    })
+    assert.equal(cliResult.status, 0, `review-cli exited ${cliResult.status}; stderr: ${cliResult.stderr}`)
+    const cliLines = cliResult.stdout.trim().split('\n').filter(Boolean)
+    assert.ok(cliLines.length >= 1, `CLI must return at least one row, got: ${cliResult.stdout}`)
+
+    // The deny row must be present. CLI format: "ts | event | rule | matched | input_summary".
+    const denyRow = cliLines.find((line) => {
+      const fields = line.split(' | ')
+      return fields[1] === 'block' && fields[2] === 'paths.deny' && fields[3].length > 0
+    })
+    assert.ok(
+      denyRow,
+      `CLI must include the deny row (event=block, rule=paths.deny, non-empty matched). Got:\n${cliResult.stdout}`,
+    )
+  } finally {
+    rmSync(dirA, { recursive: true, force: true })
+    rmSync(homeDir, { recursive: true, force: true })
+  }
 })
