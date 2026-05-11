@@ -48,7 +48,7 @@ test('composition — anthropic key AND high-entropy run produces two redaction 
 })
 
 test('multi-family — response with anthropic key and GitHub PAT produces two family entries', () => {
-  const GH_PAT = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567'
+  const GH_PAT = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
   const input = `ANT=${ANT_KEY} GH=${GH_PAT}`
   const r = scrubResponse({ text: input, config: CFG_ON })
 
