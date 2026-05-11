@@ -164,3 +164,42 @@ test('defaults include populated registry and ecosystems sub-keys', () => {
     rmSync(cwd,  { recursive: true, force: true })
   }
 })
+
+test('defaults include populated scrubber sub-keys', () => {
+  const home = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  const cwd  = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  try {
+    const config = loadConfig({ home, cwd })
+
+    assert.equal(typeof config.scrubber, 'object', 'scrubber must be an object')
+    assert.equal(config.scrubber.enabled, true, 'scrubber.enabled default is true')
+    assert.ok(Array.isArray(config.scrubber.extraPatterns), 'scrubber.extraPatterns must be an array')
+    assert.equal(config.scrubber.extraPatterns.length, 0, 'scrubber.extraPatterns default is empty')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+    rmSync(cwd,  { recursive: true, force: true })
+  }
+})
+
+test('scrubber overrides merge correctly through all three layers', () => {
+  const home = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  const cwd  = mkdtempSync(join(tmpdir(), 'sentinel-'))
+  try {
+    // user sets enabled=false; project does not override scrubber at all
+    writeSentinel(home, { scrubber: { enabled: false } })
+    const config1 = loadConfig({ home, cwd })
+    assert.equal(config1.scrubber.enabled, false, 'user override disables scrubber')
+    // extraPatterns must still be the default empty array (user did not set it)
+    assert.ok(Array.isArray(config1.scrubber.extraPatterns), 'extraPatterns survives user partial override')
+    assert.equal(config1.scrubber.extraPatterns.length, 0, 'extraPatterns is still empty after user partial override')
+
+    // project sets enabled=false; user sets enabled=true — project must win
+    writeSentinel(home, { scrubber: { enabled: true } })
+    writeSentinel(cwd,  { scrubber: { enabled: false } })
+    const config2 = loadConfig({ home, cwd })
+    assert.equal(config2.scrubber.enabled, false, 'project override wins over user override')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+    rmSync(cwd,  { recursive: true, force: true })
+  }
+})
