@@ -3,5 +3,5 @@
 mvp-prod/
 research/
 specs/
-tools/
 node_modules/
+demo/audit.jsonl

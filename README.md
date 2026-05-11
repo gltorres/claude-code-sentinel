@@ -6,9 +6,51 @@ A defense-in-depth hook plugin for [Claude Code](https://claude.com/claude-code)
 2. **Credential exfiltration in chat** — high-entropy secrets and known token prefixes (`sk-ant-`, `ghp_`, `AKIA…`, `xox[bp]-`, JWTs, Stripe, SendGrid, Slack) leaking through tool output.
 3. **Slopsquatting / hallucinated packages** — `npm install`, `pip install`, `cargo add`, etc. against packages that don't exist, are <14 days old, have <100 weekly downloads, or have no homepage/repo.
 
-## Architecture
+## Status
 
-Sentinel is a hook-first plugin. All defenses run as `PreToolUse` / `PostToolUse` / `SessionStart` / `SessionEnd` hooks — no servers, no agents, no external infrastructure.
+v1 — installable. Follow the [Install](#install--5-min) instructions below.
+All four defensive systems (path deny, bash exfil deny, registry check, output scrubber) are active.
+`make validate` passes on macOS 14+ and Ubuntu 22.04+.
+
+## Install (≤ 5 min)
+
+**Prerequisites**: Node.js ≥ 20.10 and Git.
+
+```bash
+$ node --version    # must be >= 20.10
+$ git clone <repo-url>
+$ cd claude-code-sentinel
+$ make validate
+$ claude
+> /plugin marketplace add ./claude-code-sentinel
+> /plugin install sentinel@claude-code-sentinel
+```
+
+After `/plugin install` completes, restart Claude Code (or run `/reload-plugins`) so the hooks take effect. You should see a one-line Sentinel advisory when the next session starts.
+
+**If `make validate` fails**: check that your Node version meets the ≥ 20.10 requirement. No `npm install` is needed — Sentinel has zero runtime dependencies.
+
+**Bounce-back**: if the plugin does not appear in `/plugin list`, remove it with `/plugin uninstall sentinel@claude-code-sentinel` and repeat from the `/plugin marketplace add` step.
+
+## Demo
+
+Run the four-scenario scripted demo (no Claude API key required):
+
+```bash
+make demo
+```
+
+This drives the hook end-to-end through:
+1. `cat .env` → `deny` (bash exfil rule `bash.cat`)
+2. `pip install <slopsquat>` → `ask` (registry rule `registry.too_new`)
+3. `sk-ant-…` in tool output → scrub (`additionalContext` injection)
+4. `/sentinel-review recent 3` → three audit lines from steps 1–3
+
+The full captured transcript is at [demo/transcript.md](demo/transcript.md).
+
+> **Scrubber caveat**: step 3 demonstrates the next-turn backstop, not in-turn redaction. See the caveat under "What Sentinel defends against" for the full explanation.
+
+## What Sentinel defends against
 
 | Hook | Matcher | Purpose |
 | --- | --- | --- |
@@ -21,9 +63,73 @@ Sentinel is a hook-first plugin. All defenses run as `PreToolUse` / `PostToolUse
 
 > **Output scrubber — next-turn backstop, not in-turn redaction.** By the time the `PostToolUse` hook runs, the raw tool result has already been delivered to the model's context window and written to the on-disk JSONL transcript. The `additionalContext` field is *additive*: it injects extra text into the model's next turn; it does not replace, mutate, or erase the tool result the model already received. The scrubber therefore stops a leaked credential from being *re-quoted, summarised, or memorised* across subsequent turns — it does not stop the raw value from reaching the model in this turn. For true in-turn prevention, rely on the `PreToolUse` path-deny rules (Sprint 03) and bash-exfil-deny rules (Sprint 04), which block the tool call before the result is ever produced.
 
-## Status
+## Configuration
 
-Early development. Not yet installable.
+Default rules live in `config/defaults.json`. To override, create `.claude/sentinel.json` in your home directory (user-level) or in the repo root (project-level). Project overrides take precedence over user overrides, which take precedence over defaults.
+
+Example project override that relaxes the registry age threshold:
+
+```json
+{
+  "registry": {
+    "minAgeDays": 7
+  }
+}
+```
+
+Key defaults:
+- `paths.deny` — glob patterns for files Sentinel blocks Claude from reading.
+- `bash.denyCommands` — shell commands blocked when used with denied path arguments (`cat`, `grep`, `sed`, …).
+- `registry.minAgeDays` — packages younger than this (default 14) trigger an `ask`.
+- `registry.minWeeklyDownloads` — packages with fewer downloads (default 100) trigger an `ask`.
+- `scrubber.enabled` — set `false` to disable output scrubbing (not recommended).
+
+To inspect the effective merged config:
+
+```
+/sentinel-review config
+```
+
+## Reviewing what Sentinel has done
+
+Every block, ask, scrub, and warn is appended to `~/.claude/sentinel/audit.jsonl`. Use the `/sentinel-review` slash command to inspect the log without opening raw JSONL:
+
+```
+/sentinel-review             # 7-day summary (block/ask/scrub/warn counts)
+/sentinel-review recent 10   # last 10 entries, newest first
+/sentinel-review config      # effective config with per-key source attribution
+```
+
+For a full forensic report on a flagged entry, invoke the investigator subagent:
+
+```
+/agent sentinel-investigator
+```
+
+**Mode A — package investigation:**
+> Investigate the npm package `lod4sh` version `4.17.21`
+
+**Mode B — leak investigation** (use the `id` from your audit log):
+> Investigate audit entry `01HZ9K3V2P8QRMX4TNYW5D6J7B`, my secret prefix is `ghp_Ab`
+
+The full agent instructions are in `agents/sentinel-investigator.md`.
+
+## Cross-platform support
+
+Sentinel is first-class on **macOS** (14+) and **Linux** (Ubuntu 22.04+, Debian 12+). All path handling uses Node's `node:path` and `node:os` modules — no platform-specific shell scripts exist in the repo.
+
+**Windows is supported via WSL only.** PowerShell's `${CLAUDE_PLUGIN_ROOT}` expansion is unreliable for the hook entry point, so the plugin is not certified for native Windows shells. Install the plugin inside a WSL 2 session and use the standard `make validate` and install flow above.
+
+Node ≥ 20.10 is required on all platforms. The hook enforces this at startup — if the Node version is below the threshold, Sentinel fails open (allows the tool call) and emits an advisory reason explaining the version mismatch.
+
+## Out of scope
+
+Sentinel defends against Claude Code mis-use during a trusted session. It cannot defend against a malicious `.claude/settings.json` that registers its own hooks before Sentinel's run (CVE-2025-59536). Use `git status` to check for untrusted settings files before opening any repo.
+
+Additional non-goals for v1:
+- Defending against a compromised Node.js binary or OS-level rootkit.
+- Replacing a secrets-scanning CI step (e.g. `git-secrets`, `trufflehog`) — Sentinel is a runtime backstop, not a pre-commit gate.
+- Network-egress filtering beyond registry package verification.
 
 ## Data refresh
 
@@ -58,33 +164,3 @@ Each run fetches the current top-500 lists from upstream sources (npm download s
 ## License
 
 TBD
-
-## Local development install
-
-```
-/plugin marketplace add ./claude-code-sentinel
-/plugin install sentinel@claude-code-sentinel
-/reload-plugins
-```
-
-## Investigator agent
-
-When the hook blocks or scrubs and you want a full forensic report, invoke the investigator subagent directly in Claude Code:
-
-```
-/agent sentinel-investigator
-```
-
-**Mode A — package investigation:**
-> Investigate the npm package `lod4sh` version `4.17.21`
-
-**Mode B — leak investigation** (use the `id` from your audit log at `~/.claude/sentinel/audit.jsonl`):
-> Investigate audit entry `01HZ9K3V2P8QRMX4TNYW5D6J7B`, my secret prefix is `ghp_Ab`
-
-The full agent instructions are in `agents/sentinel-investigator.md`.
-
-Keep the bundled top-500 package lists current for accurate typosquat detection:
-
-```
-make refresh-data
-```
