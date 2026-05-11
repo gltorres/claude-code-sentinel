@@ -296,6 +296,7 @@ test('--self-test: per-fixture in-process latency < 20 ms', () => {
   const fixtureCount = Number(match[1])
   const totalMs = Number(match[2])
   assert.ok(fixtureCount > 0, 'expected at least one fixture')
+  assert.ok(fixtureCount >= 21, `expected >= 21 fixtures (paths + bash), got ${fixtureCount}`)
   const perFixtureMs = totalMs / fixtureCount
   assert.ok(
     perFixtureMs < 20,

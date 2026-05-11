@@ -1,0 +1,17 @@
+{
+  "event": {
+    "hook_event_name": "PreToolUse",
+    "session_id": "self-test-bash-004",
+    "cwd": "/home/testuser/myproject",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "cp .env /tmp/exfil"
+    }
+  },
+  "expect": {
+    "decision": "deny",
+    "rule": "bash.cp",
+    "matched": "**/.env",
+    "matched_segment": "cp .env /tmp/exfil"
+  }
+}
