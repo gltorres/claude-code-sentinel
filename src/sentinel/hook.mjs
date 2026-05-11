@@ -104,7 +104,7 @@ export async function runBashBranch({ command, cwd, home, config, fetchFn, now, 
     return emitFn(
       envelopeFn('PreToolUse', {
         permissionDecision: 'deny',
-        permissionDecisionReason: BANNER_PREFIX + reg.reason,
+        permissionDecisionReason: `${BANNER_PREFIX}${reg.reason} [${reg.rule}]`,
       }),
       {
         event: 'block',
@@ -120,7 +120,7 @@ export async function runBashBranch({ command, cwd, home, config, fetchFn, now, 
     return emitFn(
       envelopeFn('PreToolUse', {
         permissionDecision: 'ask',
-        permissionDecisionReason: BANNER_PREFIX + reg.reason,
+        permissionDecisionReason: `${BANNER_PREFIX}${reg.reason} [${reg.rule}]`,
       }),
       {
         event: 'ask',
